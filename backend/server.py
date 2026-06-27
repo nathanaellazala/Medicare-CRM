@@ -1,89 +1,1126 @@
-from fastapi import FastAPI, APIRouter
+"""Health Experts CRM — Backend
+A FastAPI + MongoDB CRM with JWT auth, role-based access, lead management,
+spreadsheet import, duplicate detection, round-robin assignment, dashboards.
+"""
 from dotenv import load_dotenv
+from pathlib import Path
+load_dotenv(Path(__file__).parent / '.env')
+
+import os
+import re
+import io
+import csv
+import uuid
+import json
+import logging
+import secrets
+from datetime import datetime, timezone, timedelta, date
+from typing import List, Optional, Literal, Dict, Any
+
+import bcrypt
+import jwt
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, UploadFile, File, Form, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
-import uuid
-from datetime import datetime, timezone
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
+import pandas as pd
 
+# --- Config ---
+MONGO_URL = os.environ['MONGO_URL']
+DB_NAME = os.environ['DB_NAME']
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALG = "HS256"
+ACCESS_TTL = 60 * 60 * 12  # 12 hours
+REFRESH_TTL = 60 * 60 * 24 * 7
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+app = FastAPI(title="Health Experts CRM")
+api = APIRouter(prefix="/api")
 
-# Create the main app without a prefix
-app = FastAPI()
+logger = logging.getLogger("crm")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s - %(message)s')
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+# ============================================================================
+# Default lead statuses with colors (Tailwind tokens)
+# ============================================================================
+DEFAULT_STATUSES = [
+    {"name": "Uncalled", "color": "slate", "sort_order": 1},
+    {"name": "No Answer", "color": "yellow", "sort_order": 2},
+    {"name": "Left Voicemail", "color": "orange", "sort_order": 3},
+    {"name": "No Medicare Part B", "color": "darkred", "sort_order": 4},
+    {"name": "No Medicare", "color": "darkred", "sort_order": 5},
+    {"name": "Not Interested", "color": "red", "sort_order": 6},
+    {"name": "Wrong Number", "color": "red", "sort_order": 7},
+    {"name": "Disconnected Number", "color": "red", "sort_order": 8},
+    {"name": "Call Back Later", "color": "blue", "sort_order": 9},
+    {"name": "Appointment Set", "color": "purple", "sort_order": 10},
+    {"name": "Application Started", "color": "indigo", "sort_order": 11},
+    {"name": "Pending", "color": "teal", "sort_order": 12},
+    {"name": "Sold", "color": "green", "sort_order": 13},
+    {"name": "Do Not Call", "color": "black", "sort_order": 14},
+    {"name": "Duplicate", "color": "slate", "sort_order": 15},
+    {"name": "Ineligible", "color": "slate", "sort_order": 16},
+]
 
+CALL_RESULTS = [
+    "No Answer", "Left Voicemail", "Spoke With Lead", "Not Interested",
+    "Appointment Set", "Sold", "Wrong Number", "Disconnected",
+    "Call Back Later", "Other",
+]
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+# ============================================================================
+# Auth helpers
+# ============================================================================
+def hash_password(p: str) -> str:
+    return bcrypt.hashpw(p.encode(), bcrypt.gensalt()).decode()
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+def verify_password(p: str, h: str) -> bool:
+    try:
+        return bcrypt.checkpw(p.encode(), h.encode())
+    except Exception:
+        return False
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
+def make_token(user_id: str, email: str, role: str, ttl: int, kind: str) -> str:
+    payload = {
+        "sub": user_id, "email": email, "role": role,
+        "exp": datetime.now(timezone.utc) + timedelta(seconds=ttl),
+        "type": kind,
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+def set_auth_cookies(resp: Response, access: str, refresh: str):
+    resp.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax", max_age=ACCESS_TTL, path="/")
+    resp.set_cookie("refresh_token", refresh, httponly=True, secure=False, samesite="lax", max_age=REFRESH_TTL, path="/")
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+def clear_auth_cookies(resp: Response):
+    resp.delete_cookie("access_token", path="/")
+    resp.delete_cookie("refresh_token", path="/")
 
-# Include the router in the main app
-app.include_router(api_router)
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("access_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    if not token:
+        raise HTTPException(401, "Not authenticated")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        if payload.get("type") != "access":
+            raise HTTPException(401, "Invalid token type")
+        user = await db.users.find_one({"_id": payload["sub"]})
+        if not user:
+            raise HTTPException(401, "User not found")
+        if user.get("status") == "inactive":
+            raise HTTPException(403, "Account deactivated")
+        user.pop("password_hash", None)
+        return user
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid token")
+
+async def require_owner(user: dict = Depends(get_current_user)) -> dict:
+    if user.get("role") != "owner":
+        raise HTTPException(403, "Owner access required")
+    return user
+
+# ============================================================================
+# Utility helpers
+# ============================================================================
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def normalize_phone(p: Optional[str]) -> str:
+    if not p: return ""
+    digits = re.sub(r"\D", "", str(p))
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits
+
+def format_phone(p: Optional[str]) -> str:
+    d = normalize_phone(p)
+    if len(d) == 10:
+        return f"({d[0:3]}) {d[3:6]}-{d[6:10]}"
+    return p or ""
+
+def parse_birthdate(s: Any) -> Optional[str]:
+    if not s or (isinstance(s, float) and pd.isna(s)):
+        return None
+    if isinstance(s, (datetime, date)):
+        return s.strftime("%Y-%m-%d")
+    s = str(s).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%d/%m/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return None
+
+def parse_city_state_zip(s: Optional[str]):
+    if not s: return ("", "", "")
+    s = str(s).strip()
+    # try "City, ST 12345" or "City ST 12345"
+    m = re.match(r"^(.+?)[,\s]+([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$", s)
+    if m:
+        return (m.group(1).strip(), m.group(2).upper(), m.group(3))
+    return (s, "", "")
+
+async def add_audit(user_id: str, action: str, entity_type: str, entity_id: str, old: Any = None, new: Any = None):
+    await db.audit_logs.insert_one({
+        "_id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "action_type": action,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "old_value": old,
+        "new_value": new,
+        "created_at": now_iso(),
+    })
+
+def clean_user(u: dict) -> dict:
+    if not u: return u
+    u = dict(u)
+    u["id"] = u.pop("_id", u.get("id"))
+    u.pop("password_hash", None)
+    return u
+
+def clean_doc(d: dict) -> dict:
+    if not d: return d
+    d = dict(d)
+    if "_id" in d:
+        d["id"] = d.pop("_id")
+    return d
+
+# ============================================================================
+# Models
+# ============================================================================
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserCreateIn(BaseModel):
+    first_name: str
+    last_name: str
+    email: EmailStr
+    password: str
+    role: Literal["owner", "agent"] = "agent"
+
+class UserUpdateIn(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    status: Optional[Literal["active", "inactive"]] = None
+
+class PasswordResetIn(BaseModel):
+    password: str
+
+class LeadIn(BaseModel):
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
+    birthdate: Optional[str] = None
+    address: Optional[str] = ""
+    city: Optional[str] = ""
+    state: Optional[str] = ""
+    zip_code: Optional[str] = ""
+    county: Optional[str] = ""
+    phone_number: Optional[str] = ""
+    medicaid_number: Optional[str] = ""
+    medicare_number: Optional[str] = ""
+    medicaid_provider: Optional[str] = ""
+    medicare_parts: Optional[str] = ""
+    lead_status: Optional[str] = "Uncalled"
+    assigned_agent_id: Optional[str] = None
+
+class LeadUpdateIn(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    birthdate: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    county: Optional[str] = None
+    phone_number: Optional[str] = None
+    medicaid_number: Optional[str] = None
+    medicare_number: Optional[str] = None
+    medicaid_provider: Optional[str] = None
+    medicare_parts: Optional[str] = None
+    lead_status: Optional[str] = None
+    assigned_agent_id: Optional[str] = None
+
+class NoteIn(BaseModel):
+    note_text: str
+    is_pinned: bool = False
+
+class CallLogIn(BaseModel):
+    call_result: str
+    notes: Optional[str] = ""
+    follow_up_date: Optional[str] = None
+    duration: Optional[int] = None
+
+class AssignIn(BaseModel):
+    lead_ids: List[str]
+    agent_id: str
+
+class RoundRobinIn(BaseModel):
+    lead_ids: List[str]  # if empty, use all unassigned
+    agent_ids: List[str]
+
+class BulkStatusIn(BaseModel):
+    lead_ids: List[str]
+    lead_status: str
+
+class StatusIn(BaseModel):
+    name: str
+    color: str
+    sort_order: Optional[int] = 99
+    is_active: bool = True
+
+class ImportCommitIn(BaseModel):
+    rows: List[Dict[str, Any]]
+    mapping: Dict[str, str]
+    duplicate_handling: Literal["skip", "import_anyway", "update_existing"] = "skip"
+    assignment_method: Literal["unassigned", "round_robin"] = "unassigned"
+    agent_ids: List[str] = []
+    file_name: str = "import.csv"
+
+# ============================================================================
+# Auth Endpoints
+# ============================================================================
+@api.post("/auth/login")
+async def login(body: LoginIn, response: Response):
+    email = body.email.lower().strip()
+    user = await db.users.find_one({"email": email})
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(401, "Invalid email or password")
+    if user.get("status") == "inactive":
+        raise HTTPException(403, "Account deactivated")
+    access = make_token(user["_id"], email, user["role"], ACCESS_TTL, "access")
+    refresh = make_token(user["_id"], email, user["role"], REFRESH_TTL, "refresh")
+    set_auth_cookies(response, access, refresh)
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login_at": now_iso()}})
+    return {"user": clean_user(user), "access_token": access}
+
+@api.post("/auth/logout")
+async def logout(response: Response, _: dict = Depends(get_current_user)):
+    clear_auth_cookies(response)
+    return {"ok": True}
+
+@api.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return clean_user(user)
+
+@api.post("/auth/refresh")
+async def refresh(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(401, "No refresh token")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        if payload.get("type") != "refresh":
+            raise HTTPException(401, "Invalid token")
+        user = await db.users.find_one({"_id": payload["sub"]})
+        if not user:
+            raise HTTPException(401, "User not found")
+        access = make_token(user["_id"], user["email"], user["role"], ACCESS_TTL, "access")
+        response.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax", max_age=ACCESS_TTL, path="/")
+        return {"ok": True}
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Invalid token")
+
+# ============================================================================
+# Users / Agents
+# ============================================================================
+@api.get("/users")
+async def list_users(user: dict = Depends(get_current_user)):
+    # Both roles can list users (agents see basic info for leaderboard)
+    users = await db.users.find({}).sort("first_name", 1).to_list(500)
+    return [clean_user(u) for u in users]
+
+@api.post("/users")
+async def create_user(body: UserCreateIn, user: dict = Depends(require_owner)):
+    email = body.email.lower().strip()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(400, "Email already registered")
+    uid = str(uuid.uuid4())
+    doc = {
+        "_id": uid,
+        "first_name": body.first_name,
+        "last_name": body.last_name,
+        "email": email,
+        "password_hash": hash_password(body.password),
+        "role": body.role,
+        "status": "active",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "last_login_at": None,
+    }
+    await db.users.insert_one(doc)
+    await add_audit(user["_id"], "agent_created", "user", uid, None, {"email": email, "role": body.role})
+    return clean_user(doc)
+
+@api.patch("/users/{user_id}")
+async def update_user(user_id: str, body: UserUpdateIn, user: dict = Depends(require_owner)):
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if not updates:
+        raise HTTPException(400, "No updates")
+    updates["updated_at"] = now_iso()
+    if "email" in updates:
+        updates["email"] = updates["email"].lower().strip()
+    res = await db.users.update_one({"_id": user_id}, {"$set": updates})
+    if res.matched_count == 0:
+        raise HTTPException(404, "User not found")
+    action = "agent_deactivated" if updates.get("status") == "inactive" else "agent_updated"
+    await add_audit(user["_id"], action, "user", user_id, None, updates)
+    return clean_user(await db.users.find_one({"_id": user_id}))
+
+@api.post("/users/{user_id}/reset-password")
+async def reset_password(user_id: str, body: PasswordResetIn, user: dict = Depends(require_owner)):
+    res = await db.users.update_one(
+        {"_id": user_id},
+        {"$set": {"password_hash": hash_password(body.password), "updated_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "User not found")
+    await add_audit(user["_id"], "agent_password_reset", "user", user_id)
+    return {"ok": True}
+
+# ============================================================================
+# Lead Statuses
+# ============================================================================
+@api.get("/statuses")
+async def list_statuses(_: dict = Depends(get_current_user)):
+    items = await db.lead_statuses.find({"is_active": True}).sort("sort_order", 1).to_list(200)
+    return [clean_doc(d) for d in items]
+
+@api.post("/statuses")
+async def create_status(body: StatusIn, user: dict = Depends(require_owner)):
+    sid = str(uuid.uuid4())
+    doc = {
+        "_id": sid, "name": body.name, "color": body.color,
+        "sort_order": body.sort_order or 99, "is_active": body.is_active,
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.lead_statuses.insert_one(doc)
+    return clean_doc(doc)
+
+@api.patch("/statuses/{sid}")
+async def update_status(sid: str, body: StatusIn, user: dict = Depends(require_owner)):
+    updates = body.model_dump(exclude_unset=True)
+    updates["updated_at"] = now_iso()
+    await db.lead_statuses.update_one({"_id": sid}, {"$set": updates})
+    return clean_doc(await db.lead_statuses.find_one({"_id": sid}))
+
+@api.delete("/statuses/{sid}")
+async def delete_status(sid: str, user: dict = Depends(require_owner)):
+    await db.lead_statuses.update_one({"_id": sid}, {"$set": {"is_active": False}})
+    return {"ok": True}
+
+# ============================================================================
+# Leads
+# ============================================================================
+def lead_scope_filter(user: dict) -> dict:
+    if user["role"] == "owner":
+        return {}
+    return {"assigned_agent_id": user["_id"]}
+
+@api.get("/leads")
+async def list_leads(
+    user: dict = Depends(get_current_user),
+    q: Optional[str] = None,
+    status: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    state: Optional[str] = None,
+    county: Optional[str] = None,
+    medicare_parts: Optional[str] = None,
+    medicaid_provider: Optional[str] = None,
+    sort: str = "updated_desc",
+    limit: int = 200,
+    skip: int = 0,
+):
+    f = lead_scope_filter(user)
+    if status: f["lead_status"] = status
+    if agent_id and user["role"] == "owner":
+        f["assigned_agent_id"] = None if agent_id == "unassigned" else agent_id
+    if state: f["state"] = state.upper()
+    if county: f["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
+    if medicare_parts: f["medicare_parts"] = {"$regex": re.escape(medicare_parts), "$options": "i"}
+    if medicaid_provider: f["medicaid_provider"] = {"$regex": re.escape(medicaid_provider), "$options": "i"}
+    if q:
+        normalized = normalize_phone(q)
+        or_clauses = [
+            {"full_name": {"$regex": re.escape(q), "$options": "i"}},
+            {"medicare_number": {"$regex": re.escape(q), "$options": "i"}},
+            {"medicaid_number": {"$regex": re.escape(q), "$options": "i"}},
+            {"city": {"$regex": re.escape(q), "$options": "i"}},
+            {"county": {"$regex": re.escape(q), "$options": "i"}},
+            {"lead_status": {"$regex": re.escape(q), "$options": "i"}},
+        ]
+        if normalized:
+            or_clauses.append({"normalized_phone_number": {"$regex": normalized}})
+        f["$or"] = or_clauses
+
+    sort_map = {
+        "updated_desc": [("updated_at", -1)],
+        "updated_asc": [("updated_at", 1)],
+        "created_desc": [("created_at", -1)],
+        "created_asc": [("created_at", 1)],
+        "name_asc": [("full_name", 1)],
+        "status": [("lead_status", 1)],
+    }
+    sort_spec = sort_map.get(sort, [("updated_at", -1)])
+    total = await db.leads.count_documents(f)
+    items = await db.leads.find(f).sort(sort_spec).skip(skip).limit(limit).to_list(limit)
+    return {"total": total, "items": [clean_doc(d) for d in items]}
+
+@api.get("/leads/{lead_id}")
+async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
+    f = {"_id": lead_id, **lead_scope_filter(user)}
+    lead = await db.leads.find_one(f)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    return clean_doc(lead)
+
+@api.post("/leads")
+async def create_lead(body: LeadIn, user: dict = Depends(require_owner)):
+    lid = str(uuid.uuid4())
+    full_name = f"{body.first_name or ''} {body.last_name or ''}".strip()
+    doc = {
+        "_id": lid,
+        **body.model_dump(),
+        "full_name": full_name,
+        "normalized_phone_number": normalize_phone(body.phone_number),
+        "source_import_batch_id": None,
+        "is_duplicate": False,
+        "duplicate_group_id": None,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.leads.insert_one(doc)
+    await add_audit(user["_id"], "lead_created", "lead", lid, None, doc)
+    return clean_doc(doc)
+
+@api.patch("/leads/{lead_id}")
+async def update_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depends(get_current_user)):
+    existing = await db.leads.find_one({"_id": lead_id, **lead_scope_filter(user)})
+    if not existing:
+        raise HTTPException(404, "Lead not found")
+    updates = body.model_dump(exclude_unset=True)
+    # Agents cannot reassign leads
+    if user["role"] != "owner" and "assigned_agent_id" in updates:
+        updates.pop("assigned_agent_id", None)
+    if "phone_number" in updates:
+        updates["normalized_phone_number"] = normalize_phone(updates["phone_number"])
+    if "first_name" in updates or "last_name" in updates:
+        fn = updates.get("first_name", existing.get("first_name", ""))
+        ln = updates.get("last_name", existing.get("last_name", ""))
+        updates["full_name"] = f"{fn} {ln}".strip()
+    updates["updated_at"] = now_iso()
+    await db.leads.update_one({"_id": lead_id}, {"$set": updates})
+    # audit individual key changes
+    if "lead_status" in updates and updates["lead_status"] != existing.get("lead_status"):
+        await add_audit(user["_id"], "status_changed", "lead", lead_id,
+                        existing.get("lead_status"), updates["lead_status"])
+    if "assigned_agent_id" in updates and updates["assigned_agent_id"] != existing.get("assigned_agent_id"):
+        await add_audit(user["_id"], "lead_assigned", "lead", lead_id,
+                        existing.get("assigned_agent_id"), updates["assigned_agent_id"])
+    return clean_doc(await db.leads.find_one({"_id": lead_id}))
+
+@api.delete("/leads/{lead_id}")
+async def delete_lead(lead_id: str, user: dict = Depends(require_owner)):
+    res = await db.leads.delete_one({"_id": lead_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Lead not found")
+    await db.notes.delete_many({"lead_id": lead_id})
+    await db.call_logs.delete_many({"lead_id": lead_id})
+    await add_audit(user["_id"], "lead_deleted", "lead", lead_id)
+    return {"ok": True}
+
+@api.post("/leads/bulk-status")
+async def bulk_status(body: BulkStatusIn, user: dict = Depends(require_owner)):
+    res = await db.leads.update_many(
+        {"_id": {"$in": body.lead_ids}},
+        {"$set": {"lead_status": body.lead_status, "updated_at": now_iso()}},
+    )
+    for lid in body.lead_ids:
+        await add_audit(user["_id"], "status_changed", "lead", lid, None, body.lead_status)
+    return {"modified": res.modified_count}
+
+@api.post("/leads/assign")
+async def assign_leads(body: AssignIn, user: dict = Depends(require_owner)):
+    res = await db.leads.update_many(
+        {"_id": {"$in": body.lead_ids}},
+        {"$set": {"assigned_agent_id": body.agent_id, "updated_at": now_iso()}},
+    )
+    for lid in body.lead_ids:
+        await add_audit(user["_id"], "lead_assigned", "lead", lid, None, body.agent_id)
+    return {"modified": res.modified_count}
+
+@api.post("/leads/round-robin")
+async def round_robin(body: RoundRobinIn, user: dict = Depends(require_owner)):
+    if not body.agent_ids:
+        raise HTTPException(400, "Select at least one agent")
+    if body.lead_ids:
+        lead_ids = body.lead_ids
+    else:
+        unassigned = await db.leads.find({"assigned_agent_id": None}, {"_id": 1}).to_list(10000)
+        lead_ids = [d["_id"] for d in unassigned]
+    count = 0
+    for i, lid in enumerate(lead_ids):
+        agent = body.agent_ids[i % len(body.agent_ids)]
+        await db.leads.update_one(
+            {"_id": lid}, {"$set": {"assigned_agent_id": agent, "updated_at": now_iso()}}
+        )
+        await add_audit(user["_id"], "lead_assigned", "lead", lid, None, agent)
+        count += 1
+    return {"assigned": count, "agents": len(body.agent_ids)}
+
+@api.get("/leads/export/csv")
+async def export_csv(
+    user: dict = Depends(require_owner),
+    q: Optional[str] = None,
+    status: Optional[str] = None,
+    agent_id: Optional[str] = None,
+):
+    f = {}
+    if status: f["lead_status"] = status
+    if agent_id: f["assigned_agent_id"] = None if agent_id == "unassigned" else agent_id
+    if q:
+        f["$or"] = [
+            {"full_name": {"$regex": re.escape(q), "$options": "i"}},
+            {"normalized_phone_number": {"$regex": normalize_phone(q) or "$^"}},
+        ]
+    items = await db.leads.find(f).to_list(20000)
+    output = io.StringIO()
+    cols = ["full_name", "phone_number", "birthdate", "address", "city", "state", "zip_code",
+            "county", "medicaid_number", "medicare_number", "medicaid_provider",
+            "medicare_parts", "lead_status", "assigned_agent_id", "created_at", "updated_at"]
+    w = csv.writer(output)
+    w.writerow(cols)
+    for it in items:
+        w.writerow([it.get(c, "") for c in cols])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=leads.csv"})
+
+# ============================================================================
+# Notes
+# ============================================================================
+@api.get("/leads/{lead_id}/notes")
+async def list_notes(lead_id: str, user: dict = Depends(get_current_user)):
+    lead = await db.leads.find_one({"_id": lead_id, **lead_scope_filter(user)})
+    if not lead: raise HTTPException(404, "Lead not found")
+    notes = await db.notes.find({"lead_id": lead_id}).sort("created_at", -1).to_list(500)
+    return [clean_doc(n) for n in notes]
+
+@api.post("/leads/{lead_id}/notes")
+async def create_note(lead_id: str, body: NoteIn, user: dict = Depends(get_current_user)):
+    lead = await db.leads.find_one({"_id": lead_id, **lead_scope_filter(user)})
+    if not lead: raise HTTPException(404, "Lead not found")
+    nid = str(uuid.uuid4())
+    doc = {
+        "_id": nid, "lead_id": lead_id, "user_id": user["_id"],
+        "user_name": f"{user['first_name']} {user['last_name']}",
+        "note_text": body.note_text, "is_pinned": body.is_pinned,
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.notes.insert_one(doc)
+    await db.leads.update_one({"_id": lead_id}, {"$set": {"updated_at": now_iso()}})
+    await add_audit(user["_id"], "note_added", "lead", lead_id, None, body.note_text[:200])
+    return clean_doc(doc)
+
+@api.delete("/notes/{note_id}")
+async def delete_note(note_id: str, user: dict = Depends(get_current_user)):
+    note = await db.notes.find_one({"_id": note_id})
+    if not note: raise HTTPException(404, "Note not found")
+    if user["role"] != "owner" and note["user_id"] != user["_id"]:
+        raise HTTPException(403, "Forbidden")
+    await db.notes.delete_one({"_id": note_id})
+    return {"ok": True}
+
+# ============================================================================
+# Call Logs
+# ============================================================================
+@api.get("/leads/{lead_id}/call-logs")
+async def list_calls(lead_id: str, user: dict = Depends(get_current_user)):
+    lead = await db.leads.find_one({"_id": lead_id, **lead_scope_filter(user)})
+    if not lead: raise HTTPException(404, "Lead not found")
+    calls = await db.call_logs.find({"lead_id": lead_id}).sort("created_at", -1).to_list(500)
+    return [clean_doc(c) for c in calls]
+
+@api.post("/leads/{lead_id}/call-logs")
+async def create_call(lead_id: str, body: CallLogIn, user: dict = Depends(get_current_user)):
+    lead = await db.leads.find_one({"_id": lead_id, **lead_scope_filter(user)})
+    if not lead: raise HTTPException(404, "Lead not found")
+    cid = str(uuid.uuid4())
+    doc = {
+        "_id": cid, "lead_id": lead_id, "user_id": user["_id"],
+        "user_name": f"{user['first_name']} {user['last_name']}",
+        "call_result": body.call_result, "notes": body.notes or "",
+        "follow_up_date": body.follow_up_date, "duration": body.duration,
+        "created_at": now_iso(),
+    }
+    await db.call_logs.insert_one(doc)
+    await db.leads.update_one({"_id": lead_id}, {"$set": {"updated_at": now_iso()}})
+    await add_audit(user["_id"], "call_logged", "lead", lead_id, None, body.call_result)
+    return clean_doc(doc)
+
+# ============================================================================
+# Activity feed
+# ============================================================================
+@api.get("/leads/{lead_id}/activity")
+async def lead_activity(lead_id: str, user: dict = Depends(get_current_user)):
+    lead = await db.leads.find_one({"_id": lead_id, **lead_scope_filter(user)})
+    if not lead: raise HTTPException(404, "Lead not found")
+    notes = await db.notes.find({"lead_id": lead_id}).to_list(500)
+    calls = await db.call_logs.find({"lead_id": lead_id}).to_list(500)
+    audits = await db.audit_logs.find({"entity_type": "lead", "entity_id": lead_id}).to_list(500)
+    items = []
+    for n in notes:
+        items.append({"type": "note", "id": n["_id"], "user_id": n["user_id"], "user_name": n.get("user_name", ""),
+                      "text": n["note_text"], "is_pinned": n.get("is_pinned", False), "created_at": n["created_at"]})
+    for c in calls:
+        items.append({"type": "call", "id": c["_id"], "user_id": c["user_id"], "user_name": c.get("user_name", ""),
+                      "call_result": c["call_result"], "notes": c.get("notes", ""),
+                      "follow_up_date": c.get("follow_up_date"), "created_at": c["created_at"]})
+    for a in audits:
+        if a["action_type"] in ("status_changed", "lead_assigned", "lead_created"):
+            items.append({"type": "audit", "id": a["_id"], "user_id": a.get("user_id"),
+                          "action": a["action_type"], "old": a.get("old_value"),
+                          "new": a.get("new_value"), "created_at": a["created_at"]})
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+    return items
+
+# ============================================================================
+# Import (CSV / XLSX)
+# ============================================================================
+COL_ALIASES = {
+    "name": "name", "full name": "name", "fullname": "name",
+    "first name": "first_name", "firstname": "first_name",
+    "last name": "last_name", "lastname": "last_name",
+    "birthdate": "birthdate", "date of birth": "birthdate", "dob": "birthdate",
+    "address": "address", "adress": "address", "street": "address",
+    "city": "city", "state": "state", "zip": "zip_code", "zip code": "zip_code",
+    "city state zip": "city_state_zip", "city/state/zip": "city_state_zip",
+    "county": "county",
+    "phone": "phone_number", "phone number": "phone_number", "phone#": "phone_number",
+    "medicaid number": "medicaid_number", "medicaid#": "medicaid_number",
+    "medicare number": "medicare_number", "medicare#": "medicare_number",
+    "medicaid provider": "medicaid_provider", "provider": "medicaid_provider",
+    "medicare parts": "medicare_parts", "parts": "medicare_parts",
+}
+
+def auto_map_columns(columns: List[str]) -> Dict[str, str]:
+    mapping = {}
+    for col in columns:
+        key = re.sub(r"\s+", " ", str(col).strip().lower())
+        target = COL_ALIASES.get(key)
+        if target:
+            mapping[col] = target
+    return mapping
+
+@api.post("/imports/preview")
+async def import_preview(file: UploadFile = File(...), _: dict = Depends(require_owner)):
+    content = await file.read()
+    try:
+        if file.filename.lower().endswith(".csv"):
+            df = pd.read_csv(io.BytesIO(content))
+        else:
+            df = pd.read_excel(io.BytesIO(content))
+    except Exception as e:
+        raise HTTPException(400, f"Cannot parse file: {e}")
+    df = df.where(pd.notnull(df), None)
+    columns = [str(c) for c in df.columns.tolist()]
+    rows = df.head(500).to_dict(orient="records")
+    # normalize to strings
+    norm_rows = []
+    for r in rows:
+        nr = {}
+        for k, v in r.items():
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                nr[str(k)] = ""
+            else:
+                nr[str(k)] = v if not isinstance(v, (datetime, pd.Timestamp)) else str(v)
+        norm_rows.append(nr)
+    return {
+        "columns": columns,
+        "rows": norm_rows,
+        "auto_mapping": auto_map_columns(columns),
+        "filename": file.filename,
+        "total_rows": int(len(df)),
+    }
+
+async def find_duplicate(lead: dict) -> Optional[dict]:
+    or_conds = []
+    if lead.get("normalized_phone_number"):
+        or_conds.append({"normalized_phone_number": lead["normalized_phone_number"]})
+    if lead.get("medicare_number"):
+        or_conds.append({"medicare_number": lead["medicare_number"]})
+    if lead.get("medicaid_number"):
+        or_conds.append({"medicaid_number": lead["medicaid_number"]})
+    if lead.get("full_name") and lead.get("birthdate"):
+        or_conds.append({"full_name": lead["full_name"], "birthdate": lead["birthdate"]})
+    if not or_conds: return None
+    return await db.leads.find_one({"$or": or_conds})
+
+@api.post("/imports/commit")
+async def import_commit(body: ImportCommitIn, user: dict = Depends(require_owner)):
+    batch_id = str(uuid.uuid4())
+    imported = 0
+    duplicates = 0
+    skipped = 0
+    errors = 0
+    new_lead_ids = []
+
+    for row in body.rows:
+        try:
+            mapped: Dict[str, Any] = {}
+            for src, target in body.mapping.items():
+                val = row.get(src)
+                if val is None: continue
+                mapped[target] = val
+
+            # Split combined fields
+            if "name" in mapped and not (mapped.get("first_name") or mapped.get("last_name")):
+                parts = str(mapped["name"]).strip().split(None, 1)
+                mapped["first_name"] = parts[0] if parts else ""
+                mapped["last_name"] = parts[1] if len(parts) > 1 else ""
+            if "city_state_zip" in mapped:
+                c, s, z = parse_city_state_zip(str(mapped["city_state_zip"]))
+                mapped.setdefault("city", c)
+                mapped.setdefault("state", s)
+                mapped.setdefault("zip_code", z)
+            phone = str(mapped.get("phone_number", "") or "").strip()
+            normalized = normalize_phone(phone)
+            if not phone and not (mapped.get("first_name") or mapped.get("last_name") or mapped.get("name")):
+                skipped += 1
+                continue
+            first = str(mapped.get("first_name", "") or "").strip()
+            last = str(mapped.get("last_name", "") or "").strip()
+            full = f"{first} {last}".strip()
+
+            lead_doc = {
+                "_id": str(uuid.uuid4()),
+                "first_name": first, "last_name": last, "full_name": full,
+                "birthdate": parse_birthdate(mapped.get("birthdate")),
+                "address": str(mapped.get("address", "") or "").strip(),
+                "city": str(mapped.get("city", "") or "").strip(),
+                "state": str(mapped.get("state", "") or "").strip().upper()[:2] if mapped.get("state") else "",
+                "zip_code": str(mapped.get("zip_code", "") or "").strip(),
+                "county": str(mapped.get("county", "") or "").strip(),
+                "phone_number": format_phone(phone) if phone else "",
+                "normalized_phone_number": normalized,
+                "medicaid_number": str(mapped.get("medicaid_number", "") or "").strip(),
+                "medicare_number": str(mapped.get("medicare_number", "") or "").strip(),
+                "medicaid_provider": str(mapped.get("medicaid_provider", "") or "").strip(),
+                "medicare_parts": str(mapped.get("medicare_parts", "") or "").strip(),
+                "lead_status": "Uncalled",
+                "assigned_agent_id": None,
+                "source_import_batch_id": batch_id,
+                "is_duplicate": False,
+                "duplicate_group_id": None,
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            }
+            dup = await find_duplicate(lead_doc)
+            if dup:
+                duplicates += 1
+                if body.duplicate_handling == "skip":
+                    # mark imported flag false, leave existing
+                    continue
+                elif body.duplicate_handling == "update_existing":
+                    upd = {k: v for k, v in lead_doc.items() if v not in (None, "", []) and k not in ("_id", "created_at")}
+                    upd["updated_at"] = now_iso()
+                    await db.leads.update_one({"_id": dup["_id"]}, {"$set": upd})
+                    continue
+                else:  # import_anyway
+                    lead_doc["is_duplicate"] = True
+                    lead_doc["duplicate_group_id"] = dup["_id"]
+            await db.leads.insert_one(lead_doc)
+            new_lead_ids.append(lead_doc["_id"])
+            imported += 1
+        except Exception as e:
+            logger.exception("import row error: %s", e)
+            errors += 1
+
+    # assignment
+    auto_assigned = 0
+    if body.assignment_method == "round_robin" and body.agent_ids and new_lead_ids:
+        for i, lid in enumerate(new_lead_ids):
+            agent = body.agent_ids[i % len(body.agent_ids)]
+            await db.leads.update_one({"_id": lid}, {"$set": {"assigned_agent_id": agent, "updated_at": now_iso()}})
+            auto_assigned += 1
+
+    batch_doc = {
+        "_id": batch_id,
+        "uploaded_by_user_id": user["_id"],
+        "file_name": body.file_name,
+        "total_rows": len(body.rows),
+        "imported_rows": imported,
+        "duplicate_rows": duplicates,
+        "skipped_rows": skipped,
+        "error_rows": errors,
+        "assignment_method": body.assignment_method,
+        "created_at": now_iso(),
+    }
+    await db.import_batches.insert_one(batch_doc)
+    await add_audit(user["_id"], "leads_imported", "import_batch", batch_id, None, batch_doc)
+    return {**batch_doc, "id": batch_id, "auto_assigned": auto_assigned, "unassigned": imported - auto_assigned}
+
+@api.get("/imports")
+async def list_imports(_: dict = Depends(require_owner)):
+    batches = await db.import_batches.find({}).sort("created_at", -1).to_list(100)
+    return [clean_doc(b) for b in batches]
+
+# ============================================================================
+# Duplicates
+# ============================================================================
+@api.get("/duplicates")
+async def get_duplicate_groups(_: dict = Depends(require_owner)):
+    # group by normalized phone with count > 1
+    pipeline = [
+        {"$match": {"normalized_phone_number": {"$ne": ""}}},
+        {"$group": {"_id": "$normalized_phone_number", "count": {"$sum": 1}, "leads": {"$push": "$$ROOT"}}},
+        {"$match": {"count": {"$gt": 1}}},
+        {"$limit": 100},
+    ]
+    groups = []
+    async for g in db.leads.aggregate(pipeline):
+        groups.append({
+            "key": g["_id"],
+            "count": g["count"],
+            "leads": [clean_doc(l) for l in g["leads"]],
+        })
+    return groups
+
+@api.post("/duplicates/merge")
+async def merge_duplicates(body: dict, user: dict = Depends(require_owner)):
+    keep_id = body.get("keep_id")
+    delete_ids = body.get("delete_ids", [])
+    if not keep_id or not delete_ids:
+        raise HTTPException(400, "keep_id and delete_ids required")
+    # move notes/calls to kept lead
+    await db.notes.update_many({"lead_id": {"$in": delete_ids}}, {"$set": {"lead_id": keep_id}})
+    await db.call_logs.update_many({"lead_id": {"$in": delete_ids}}, {"$set": {"lead_id": keep_id}})
+    await db.leads.delete_many({"_id": {"$in": delete_ids}})
+    await add_audit(user["_id"], "duplicates_merged", "lead", keep_id, delete_ids, None)
+    return {"ok": True, "merged_into": keep_id, "deleted": len(delete_ids)}
+
+# ============================================================================
+# Dashboards
+# ============================================================================
+@api.get("/dashboard/owner")
+async def owner_dashboard(_: dict = Depends(require_owner)):
+    now = datetime.now(timezone.utc)
+    week_ago = (now - timedelta(days=7)).isoformat()
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc).isoformat()
+
+    total = await db.leads.count_documents({})
+    new_week = await db.leads.count_documents({"created_at": {"$gte": week_ago}})
+    unassigned = await db.leads.count_documents({"assigned_agent_id": None})
+    assigned = total - unassigned
+    uncalled = await db.leads.count_documents({"lead_status": "Uncalled"})
+    appt = await db.leads.count_documents({"lead_status": "Appointment Set"})
+    sold = await db.leads.count_documents({"lead_status": "Sold"})
+    not_interested = await db.leads.count_documents({"lead_status": "Not Interested"})
+    no_answer = await db.leads.count_documents({"lead_status": "No Answer"})
+    dup = await db.leads.count_documents({"is_duplicate": True})
+    active_agents = await db.users.count_documents({"role": "agent", "status": "active"})
+    calls_today = await db.call_logs.count_documents({"created_at": {"$gte": today_start}})
+    calls_week = await db.call_logs.count_documents({"created_at": {"$gte": week_ago}})
+
+    # leads by status
+    by_status = []
+    async for g in db.leads.aggregate([{"$group": {"_id": "$lead_status", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}]):
+        by_status.append({"status": g["_id"], "count": g["count"]})
+
+    # leads by agent
+    by_agent = []
+    async for g in db.leads.aggregate([
+        {"$match": {"assigned_agent_id": {"$ne": None}}},
+        {"$group": {"_id": "$assigned_agent_id", "count": {"$sum": 1}}}
+    ]):
+        u = await db.users.find_one({"_id": g["_id"]})
+        if u:
+            by_agent.append({"agent_id": g["_id"], "agent_name": f"{u['first_name']} {u['last_name']}", "count": g["count"]})
+
+    return {
+        "cards": {
+            "total_leads": total, "new_week": new_week, "unassigned": unassigned, "assigned": assigned,
+            "uncalled": uncalled, "appointment_set": appt, "sold": sold,
+            "not_interested": not_interested, "no_answer": no_answer, "duplicate": dup,
+            "active_agents": active_agents, "calls_today": calls_today, "calls_week": calls_week,
+        },
+        "by_status": by_status,
+        "by_agent": by_agent,
+        "funnel": {
+            "uncalled": uncalled,
+            "contacted": total - uncalled,
+            "appointment_set": appt,
+            "sold": sold,
+        },
+    }
+
+@api.get("/dashboard/agent")
+async def agent_dashboard(user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
+    week_ago = (now - timedelta(days=7)).isoformat()
+    today_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc).isoformat()
+    uid = user["_id"]
+    f = {"assigned_agent_id": uid}
+    total = await db.leads.count_documents(f)
+    uncalled = await db.leads.count_documents({**f, "lead_status": "Uncalled"})
+    no_answer = await db.leads.count_documents({**f, "lead_status": "No Answer"})
+    appt = await db.leads.count_documents({**f, "lead_status": "Appointment Set"})
+    sold = await db.leads.count_documents({**f, "lead_status": "Sold"})
+    calls_today = await db.call_logs.count_documents({"user_id": uid, "created_at": {"$gte": today_start}})
+    calls_week = await db.call_logs.count_documents({"user_id": uid, "created_at": {"$gte": week_ago}})
+    return {
+        "cards": {
+            "total_leads": total, "uncalled": uncalled, "no_answer": no_answer,
+            "appointment_set": appt, "sold": sold,
+            "calls_today": calls_today, "calls_week": calls_week,
+        }
+    }
+
+# ============================================================================
+# Leaderboard
+# ============================================================================
+@api.get("/leaderboard")
+async def leaderboard(user: dict = Depends(get_current_user), range: str = "week"):
+    now = datetime.now(timezone.utc)
+    if range == "today":
+        since = datetime(now.year, now.month, now.day, tzinfo=timezone.utc).isoformat()
+    elif range == "month":
+        since = (now - timedelta(days=30)).isoformat()
+    elif range == "all":
+        since = "1970-01-01"
+    else:
+        since = (now - timedelta(days=7)).isoformat()
+    agents = await db.users.find({"role": "agent"}).to_list(200)
+    rows = []
+    for a in agents:
+        aid = a["_id"]
+        assigned = await db.leads.count_documents({"assigned_agent_id": aid})
+        calls = await db.call_logs.count_documents({"user_id": aid, "created_at": {"$gte": since}})
+        appts = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Appointment Set"})
+        sold = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Sold"})
+        last = await db.call_logs.find_one({"user_id": aid}, sort=[("created_at", -1)])
+        rows.append({
+            "agent_id": aid,
+            "agent_name": f"{a['first_name']} {a['last_name']}",
+            "status": a.get("status", "active"),
+            "assigned": assigned,
+            "calls": calls,
+            "appointments": appts,
+            "sold": sold,
+            "conversion_rate": round((sold / assigned * 100) if assigned else 0, 1),
+            "last_activity": last["created_at"] if last else None,
+        })
+    rows.sort(key=lambda r: (r["sold"], r["appointments"], r["calls"]), reverse=True)
+    for i, r in enumerate(rows):
+        r["rank"] = i + 1
+    return rows
+
+# ============================================================================
+# Company settings
+# ============================================================================
+@api.get("/settings/company")
+async def get_company(_: dict = Depends(get_current_user)):
+    doc = await db.company_settings.find_one({"_id": "company"})
+    if not doc:
+        doc = {
+            "_id": "company",
+            "company_name": "Health Experts",
+            "crm_name": "Health Experts CRM",
+            "primary_color": "#026AA2",
+            "contact_email": "hello@healthexpertscrm.com",
+            "contact_phone": "(555) 010-2020",
+            "logo_url": "",
+        }
+        await db.company_settings.insert_one(doc)
+    return clean_doc(doc)
+
+@api.patch("/settings/company")
+async def update_company(body: dict, user: dict = Depends(require_owner)):
+    body.pop("id", None); body.pop("_id", None)
+    body["updated_at"] = now_iso()
+    await db.company_settings.update_one({"_id": "company"}, {"$set": body}, upsert=True)
+    return clean_doc(await db.company_settings.find_one({"_id": "company"}))
+
+# ============================================================================
+# Constants endpoint
+# ============================================================================
+@api.get("/constants/call-results")
+async def call_results(_: dict = Depends(get_current_user)):
+    return CALL_RESULTS
+
+# ============================================================================
+# App wiring
+# ============================================================================
+app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=["*"],
+    allow_credentials=False,  # using bearer token via localStorage too
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# ============================================================================
+# Startup: indexes + seed
+# ============================================================================
+@app.on_event("startup")
+async def startup():
+    await db.users.create_index("email", unique=True)
+    await db.leads.create_index("normalized_phone_number")
+    await db.leads.create_index("assigned_agent_id")
+    await db.leads.create_index("lead_status")
+    await db.notes.create_index("lead_id")
+    await db.call_logs.create_index("lead_id")
+    await db.call_logs.create_index("user_id")
+    await db.audit_logs.create_index("entity_id")
+
+    # Seed statuses
+    if await db.lead_statuses.count_documents({}) == 0:
+        for s in DEFAULT_STATUSES:
+            await db.lead_statuses.insert_one({
+                "_id": str(uuid.uuid4()), **s, "is_active": True,
+                "created_at": now_iso(), "updated_at": now_iso(),
+            })
+
+    # Seed users
+    from seed import seed_demo_data
+    await seed_demo_data(db, hash_password)
+
+    # Write test credentials
+    try:
+        memory = Path("/app/memory")
+        memory.mkdir(exist_ok=True)
+        (memory / "test_credentials.md").write_text(
+            "# Health Experts CRM — Test Credentials\n\n"
+            "## Owner / Admin\n"
+            "- Email: owner@healthexpertscrm.com\n"
+            "- Password: Password123!\n"
+            "- Role: owner\n\n"
+            "## Agents\n"
+            "- agent1@healthexpertscrm.com / Password123! (role: agent)\n"
+            "- agent2@healthexpertscrm.com / Password123! (role: agent)\n"
+            "- agent3@healthexpertscrm.com / Password123! (role: agent)\n\n"
+            "## Auth Endpoints\n"
+            "- POST /api/auth/login\n"
+            "- POST /api/auth/logout\n"
+            "- GET  /api/auth/me\n"
+            "- POST /api/auth/refresh\n"
+        )
+    except Exception:
+        pass
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown():
     client.close()
