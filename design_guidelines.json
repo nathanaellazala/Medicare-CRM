@@ -1,0 +1,152 @@
+{
+  "project_name": "Health Experts CRM",
+  "domain": "Health/Insurance Sales CRM",
+  "theme": "Light",
+  "archetype": "4 (Swiss & High-Contrast) + Professional Medical/Enterprise",
+  "design_philosophy": {
+    "vibe": "Trustworthy, clean, professional, enterprise SaaS",
+    "inspiration": "Salesforce CRM layout and usability, without copying branding",
+    "spacing_strategy": "Control Room Grid. Dense, compact spacing. gap-4, tight data tables, explicit borders.",
+    "surface_strategy": "Grid Borders & Neumorphism variant. Flat backgrounds, 1px solid borders, max 8px border radius. No heavy shadows."
+  },
+  "colors": {
+    "background": {
+      "page": "#F8FAFC",
+      "card": "#FFFFFF",
+      "sidebar": "#FFFFFF",
+      "top_nav": "#FFFFFF"
+    },
+    "text": {
+      "primary": "#0F172A",
+      "secondary": "#475569",
+      "muted": "#94A3B8"
+    },
+    "primary": {
+      "base": "#026AA2",
+      "hover": "#025684",
+      "active": "#014266",
+      "light": "#F0F9FF",
+      "foreground": "#FFFFFF"
+    },
+    "secondary": {
+      "base": "#E2E8F0",
+      "hover": "#CBD5E1",
+      "foreground": "#0F172A"
+    },
+    "status_badges": {
+      "uncalled": { "bg": "#F1F5F9", "text": "#475569", "border": "#CBD5E1" },
+      "no_answer": { "bg": "#FEF9C3", "text": "#854D0E", "border": "#FEF08A" },
+      "left_voicemail": { "bg": "#FFEDD5", "text": "#C2410C", "border": "#FED7AA" },
+      "call_back_later": { "bg": "#DBEAFE", "text": "#1D4ED8", "border": "#BFDBFE" },
+      "appointment_set": { "bg": "#F3E8FF", "text": "#7E22CE", "border": "#E9D5FF" },
+      "application_started": { "bg": "#E0E7FF", "text": "#4338CA", "border": "#C7D2FE" },
+      "pending": { "bg": "#CCFBF1", "text": "#0F766E", "border": "#99F6E4" },
+      "sold": { "bg": "#DCFCE7", "text": "#15803D", "border": "#BBF7D0" },
+      "not_interested": { "bg": "#FEE2E2", "text": "#B91C1C", "border": "#FECACA" },
+      "no_medicare": { "bg": "#991B1B", "text": "#FFFFFF", "border": "#7F1D1D" },
+      "do_not_call": { "bg": "#000000", "text": "#FFFFFF", "border": "#000000" },
+      "duplicate": { "bg": "#E2E8F0", "text": "#475569", "border": "#94A3B8" }
+    },
+    "borders": {
+      "default": "#E2E8F0",
+      "focus": "#026AA2"
+    }
+  },
+  "typography": {
+    "banned_fonts": ["Inter", "Roboto", "Open Sans", "Lato"],
+    "headings": {
+      "font_family": "'Work Sans', sans-serif",
+      "weights": [500, 600, 700],
+      "style": "Authoritative, professional, slightly condensed."
+    },
+    "body": {
+      "font_family": "'IBM Plex Sans', sans-serif",
+      "weights": [400, 500],
+      "style": "Precise, highly legible at small sizes, data-friendly."
+    },
+    "scales": {
+      "h1": "text-2xl font-semibold tracking-tight",
+      "h2": "text-xl font-semibold tracking-tight",
+      "h3": "text-lg font-medium tracking-tight",
+      "body": "text-sm",
+      "small": "text-xs uppercase tracking-wider"
+    }
+  },
+  "components": {
+    "cards": {
+      "classes": "bg-white border border-slate-200 rounded-md shadow-sm p-4",
+      "header_classes": "border-b border-slate-100 pb-3 mb-4"
+    },
+    "buttons": {
+      "primary": "bg-[#026AA2] text-white hover:bg-[#025684] rounded shadow-sm px-4 py-2 text-sm font-medium transition-colors",
+      "secondary": "bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 rounded shadow-sm px-4 py-2 text-sm font-medium transition-colors"
+    },
+    "tables": {
+      "wrapper": "border border-slate-200 rounded-md overflow-hidden bg-white",
+      "header": "bg-slate-50 border-b border-slate-200 text-slate-600 text-xs font-semibold uppercase tracking-wider text-left",
+      "row": "border-b border-slate-100 hover:bg-slate-50 transition-colors cursor-pointer",
+      "cell": "px-4 py-3 text-sm text-slate-700 align-middle"
+    },
+    "inputs": {
+      "classes": "w-full border border-slate-300 rounded-md px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#026AA2]/20 focus:border-[#026AA2] bg-white transition-all shadow-sm"
+    },
+    "sidebar": {
+      "wrapper": "w-64 bg-white border-r border-slate-200 flex flex-col h-screen shrink-0",
+      "link": "flex items-center gap-3 px-3 py-2 mx-2 my-1 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 transition-colors",
+      "link_active": "flex items-center gap-3 px-3 py-2 mx-2 my-1 rounded-md text-sm font-medium bg-blue-50 text-[#026AA2] transition-colors"
+    },
+    "top_nav": {
+      "wrapper": "h-16 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 sticky top-0 z-40"
+    },
+    "badges": {
+      "base_classes": "px-2.5 py-0.5 rounded-full text-xs font-medium border"
+    }
+  },
+  "layout": {
+    "structure": "flex h-screen bg-[#F8FAFC] overflow-hidden",
+    "main_content": "flex-1 flex flex-col h-full overflow-hidden",
+    "page_container": "flex-1 overflow-y-auto p-6 md:p-8"
+  },
+  "icons_library": "lucide-react",
+  "media": {
+    "images": [
+      {
+        "category": "avatar_male",
+        "url": "https://images.unsplash.com/photo-1652471943570-f3590a4e52ed",
+        "description": "Male agent profile picture"
+      },
+      {
+        "category": "avatar_female",
+        "url": "https://images.unsplash.com/photo-1494790108377-be9c29b29330",
+        "description": "Female owner profile picture"
+      }
+    ]
+  },
+  "pages_to_build": [
+    "Login",
+    "Owner Dashboard",
+    "Agent Dashboard",
+    "Leads List",
+    "My Leads",
+    "Lead Detail (Overview, Notes, Call Logs, Activity History tabs)",
+    "Import Leads (column mapping preview)",
+    "Duplicates Review",
+    "Agents Management",
+    "Assign Leads (manual + round-robin)",
+    "Leaderboard (with rank badges)",
+    "Reports",
+    "Settings"
+  ],
+  "accessibility_and_testing": {
+    "data_testid_requirement": "All interactive and key informational elements MUST include a data-testid attribute to facilitate robust automated testing.",
+    "contrast": "Text must meet 4.5:1 ratio. Hover states must have explicitly defined text colors."
+  },
+  "instructions_to_main_agent": [
+    "Build a strict layout: Sidebar on left, TopNav on top. Main content area scrolls independently.",
+    "DO NOT use emojis. Only use lucide-react icons.",
+    "DO NOT use purple/violet generic SaaS gradients.",
+    "Enforce specific colored status badges as mapped in colors.status_badges.",
+    "Use Work Sans for Headings and IBM Plex Sans for Body. Import these from Google Fonts.",
+    "Implement tables with clear borders, hover effects, and a highly professional 'Salesforce Lightning' data-density feel."
+  ]
+}
