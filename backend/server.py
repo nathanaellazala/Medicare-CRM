@@ -1176,6 +1176,23 @@ async def startup():
     await db.call_logs.create_index("user_id")
     await db.audit_logs.create_index("entity_id")
 
+    # One-time production launch cleanup — runs exactly once per environment.
+    # Wipes leftover demo seed (owner@healthexpertscrm.com + agent1-3 + 50 leads)
+    # so the app boots into a clean, launch-ready state with only the Henry owner.
+    marker = await db.system_meta.find_one({"_id": "launch_cleanup_v1"})
+    if not marker:
+        demo_owner = await db.users.find_one({"email": "owner@healthexpertscrm.com"})
+        demo_agents = await db.users.count_documents({"email": {"$regex": r"^agent\d@healthexpertscrm\.com$"}})
+        if demo_owner or demo_agents > 0:
+            logger.info("Launch cleanup: wiping demo data (owner=%s, demo_agents=%s)", bool(demo_owner), demo_agents)
+            for col in ("users", "leads", "notes", "call_logs", "audit_logs",
+                        "import_batches", "lead_statuses", "company_settings"):
+                await db[col].delete_many({})
+        await db.system_meta.insert_one({
+            "_id": "launch_cleanup_v1",
+            "ran_at": now_iso(),
+        })
+
     # Seed statuses
     if await db.lead_statuses.count_documents({}) == 0:
         for s in DEFAULT_STATUSES:
