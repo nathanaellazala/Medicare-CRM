@@ -1,10 +1,8 @@
-"""Owner seed for Health Experts CRM (production-ready).
-Creates a single owner account from env vars if it doesn't already exist.
-No demo agents, leads, notes, call logs, or import batches are created.
+"""Owner seed — creates a default owner only if NO owner exists yet.
+Safe for existing deployments: does nothing when an owner is already present.
 """
-import os
-import uuid
 from datetime import datetime, timezone
+import uuid
 
 
 def _iso(dt: datetime) -> str:
@@ -12,23 +10,16 @@ def _iso(dt: datetime) -> str:
 
 
 async def seed_demo_data(db, hash_password):
-    """Idempotent: ensures the launch owner account exists (hardcoded so
-    production env vars can never override or miss the intended credentials)."""
-    email = "henry@healthexpertscrm.com"
-    password = "Password123!"
-    first = "Henry"
-    last = "Owner"
-
-    existing = await db.users.find_one({"email": email})
-    if existing:
+    """Idempotent: ensure at least one owner exists. If one already exists
+    (e.g. owner@healthexpertscrm.com on production), do nothing."""
+    if await db.users.find_one({"role": "owner"}):
         return
-
     await db.users.insert_one({
         "_id": str(uuid.uuid4()),
-        "first_name": first,
-        "last_name": last,
-        "email": email,
-        "password_hash": hash_password(password),
+        "first_name": "Henry",
+        "last_name": "Owner",
+        "email": "henry@healthexpertscrm.com",
+        "password_hash": hash_password("Password123!"),
         "role": "owner",
         "status": "active",
         "on_leaderboard": False,
