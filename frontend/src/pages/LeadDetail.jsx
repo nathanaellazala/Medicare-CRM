@@ -153,6 +153,13 @@ export default function LeadDetail() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Select value={lead.lead_type || "New to Medicare"} onValueChange={(v) => updateField("lead_type", v)}>
+              <SelectTrigger className="h-9 w-40" data-testid="lead-type-select"><SelectValue/></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="New to Medicare">New to Medicare</SelectItem>
+                <SelectItem value="Transfer">Transfer</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={lead.lead_status} onValueChange={(v) => updateField("lead_status", v)}>
               <SelectTrigger className="h-9 w-44" data-testid="lead-status-select"><SelectValue/></SelectTrigger>
               <SelectContent>
@@ -227,8 +234,7 @@ export default function LeadDetail() {
             <Field label="City / State" value={lead.city ? `${lead.city}, ${lead.state}` : ""}/>
             <Field label="Zip" value={lead.zip_code}/>
             <Field label="County" value={lead.county}/>
-            <Field label="Medicare #" value={lead.medicare_number} copyable/>
-            <Field label="Medicaid #" value={lead.medicaid_number} copyable/>
+            <Field label="Lead Type" value={lead.lead_type || "New to Medicare"}/>
             <Field label="Medicaid Provider" value={lead.medicaid_provider}/>
             <Field label="Medicare Parts" value={lead.medicare_parts}/>
           </div>

@@ -115,6 +115,7 @@ async def seed_demo_data(db, hash_password):
             "medicare_number": f"{random.randint(100, 999)}-{random.randint(10, 99)}-{random.randint(1000, 9999)}-A",
             "medicaid_provider": random.choice(PROVIDERS),
             "medicare_parts": random.choice(PARTS),
+            "lead_type": random.choice(["New to Medicare", "Transfer"]),
             "lead_status": status,
             "assigned_agent_id": agent_id,
             "source_import_batch_id": batch_id,

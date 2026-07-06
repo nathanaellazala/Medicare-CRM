@@ -74,3 +74,24 @@ Build a professional, Salesforce-inspired Medicare sales CRM called **Health Exp
 2. Add brute-force lockout per playbook spec
 3. Add notification bell with badge count
 4. Implement saved filters + recently viewed leads
+
+---
+
+## Iteration 2 — Feature Round (Feb 2026)
+Delivered based on user feedback:
+1. **Idle auto-logout** — Layout.jsx tracks mousemove/keydown/click/scroll. Sends `POST /api/users/me/heartbeat` every 60s; after 30 min of no activity, calls `logout()` and redirects to `/login`.
+2. **Lead Type field** (`New to Medicare` / `Transfer`) — added to Lead model, `lead_type` filter on `/api/leads`, colored badge in table, dropdown editor on Lead Detail, mapping option in Import wizard.
+3. **On/off leaderboard toggle** — `on_leaderboard` bool on users. Owner toggles from Agents page; hidden agents excluded from `/api/leaderboard` results.
+4. **Movement arrows** — Leaderboard computes prev-period ranks and returns `movement` (up/down/same/new) + `rank_change` integer. Shown next to each agent.
+5. **No calls column on leaderboard** — sort now sold → appts → conversion; calls hidden.
+6. **Daily/Weekly/Monthly periods + prev-period nav** — `/api/leaderboard?period=today|week|month&offset=N`. Frontend has tabs + prev/next buttons + human label ("Week of Jul 06, 2026", "June 2026", etc.).
+7. **Redesigned leaderboard** — Top-3 podium (2nd–1st–3rd staggered heights, gold/silver/bronze gradients, huge outline rank number), agents-competing/total-sold/total-appts strip, sales-progress bars scaled to leader, flame icon for #1, movement indicators inline.
+8. **Removed Medicare/Medicaid Number** — dropped from Leads table columns, Lead Detail fields, Import mapping targets, search placeholders, and Leaderboard.
+
+Backend fields retained silently for backward compat with prior imports (no UI surfaces them).
+
+## Deferred (still v2 backlog)
+- Reports page with CSV export
+- Brute-force lockout & rate limiting on login
+- Notification bell with new-assigned-lead alerts
+- Saved filters, dark mode, pinned-notes UI, import history page

@@ -27,6 +27,7 @@ export default function Leads() {
   const [q, setQ] = useState(params.get("q") || "");
   const [status, setStatus] = useState(params.get("status") || "");
   const [agentFilter, setAgentFilter] = useState(params.get("agent_id") || "");
+  const [leadType, setLeadType] = useState(params.get("lead_type") || "");
   const [sort, setSort] = useState("updated_desc");
   const [statuses, setStatuses] = useState([]);
   const [agents, setAgents] = useState([]);
@@ -43,6 +44,7 @@ export default function Leads() {
       if (q) qs.q = q;
       if (status) qs.status = status;
       if (agentFilter && isOwner) qs.agent_id = agentFilter;
+      if (leadType) qs.lead_type = leadType;
       if (sort) qs.sort = sort;
       const { data } = await api.get("/leads", { params: qs });
       setItems(data.items);
@@ -59,7 +61,7 @@ export default function Leads() {
     if (isOwner) api.get("/users").then((r) => setAgents(r.data.filter((u) => u.role === "agent"))).catch(() => {});
   }, [isOwner]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [status, agentFilter, sort]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [status, agentFilter, leadType, sort]);
 
   useEffect(() => {
     const handler = setTimeout(() => load(), 250);
@@ -149,7 +151,7 @@ export default function Leads() {
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name, phone, Medicare, county..."
+            placeholder="Search name, phone, county, city..."
             className="pl-9 h-9"
             data-testid="leads-search"
           />
@@ -179,6 +181,17 @@ export default function Leads() {
             </SelectContent>
           </Select>
         )}
+
+        <Select value={leadType || "all"} onValueChange={(v) => setLeadType(v === "all" ? "" : v)}>
+          <SelectTrigger className="h-9 w-40" data-testid="filter-type">
+            <SelectValue placeholder="All types" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All types</SelectItem>
+            <SelectItem value="New to Medicare">New to Medicare</SelectItem>
+            <SelectItem value="Transfer">Transfer</SelectItem>
+          </SelectContent>
+        </Select>
 
         <Select value={sort} onValueChange={setSort}>
           <SelectTrigger className="h-9 w-44" data-testid="filter-sort">
@@ -233,6 +246,7 @@ export default function Leads() {
                 <th className="px-4 py-3">Birthdate</th>
                 <th className="px-4 py-3">County</th>
                 <th className="px-4 py-3">City / State</th>
+                <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Status</th>
                 {isOwner && <th className="px-4 py-3">Agent</th>}
                 <th className="px-4 py-3">Provider</th>
@@ -243,10 +257,10 @@ export default function Leads() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={isOwner ? 12 : 10} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
+                <tr><td colSpan={isOwner ? 13 : 11} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={isOwner ? 12 : 10} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
+                <tr><td colSpan={isOwner ? 13 : 11} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
               )}
               {!loading && items.map((lead) => (
                 <tr key={lead.id} className="cursor-pointer" data-testid={`lead-row-${lead.id}`}
@@ -268,6 +282,15 @@ export default function Leads() {
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.county || "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-700">
                     {lead.city ? `${lead.city}, ${lead.state}` : "—"}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded border ${
+                      lead.lead_type === "Transfer"
+                        ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+                        : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    }`}>
+                      {lead.lead_type === "Transfer" ? "Transfer" : "New"}
+                    </span>
                   </td>
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <Select value={lead.lead_status} onValueChange={(v) => quickStatus(lead.id, v)}>

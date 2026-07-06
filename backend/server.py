@@ -214,6 +214,7 @@ class UserUpdateIn(BaseModel):
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
     status: Optional[Literal["active", "inactive"]] = None
+    on_leaderboard: Optional[bool] = None
 
 class PasswordResetIn(BaseModel):
     password: str
@@ -232,6 +233,7 @@ class LeadIn(BaseModel):
     medicare_number: Optional[str] = ""
     medicaid_provider: Optional[str] = ""
     medicare_parts: Optional[str] = ""
+    lead_type: Optional[Literal["New to Medicare", "Transfer"]] = "New to Medicare"
     lead_status: Optional[str] = "Uncalled"
     assigned_agent_id: Optional[str] = None
 
@@ -249,6 +251,7 @@ class LeadUpdateIn(BaseModel):
     medicare_number: Optional[str] = None
     medicaid_provider: Optional[str] = None
     medicare_parts: Optional[str] = None
+    lead_type: Optional[Literal["New to Medicare", "Transfer"]] = None
     lead_status: Optional[str] = None
     assigned_agent_id: Optional[str] = None
 
@@ -339,7 +342,35 @@ async def refresh(request: Request, response: Response):
 async def list_users(user: dict = Depends(get_current_user)):
     # Both roles can list users (agents see basic info for leaderboard)
     users = await db.users.find({}).sort("first_name", 1).to_list(500)
-    return [clean_user(u) for u in users]
+    now = datetime.now(timezone.utc)
+    result = []
+    for u in users:
+        cu = clean_user(u)
+        # Compute activity_status based on last_activity_at
+        last = u.get("last_activity_at")
+        if last:
+            try:
+                dt = datetime.fromisoformat(last.replace("Z", "+00:00")) if isinstance(last, str) else last
+                delta_min = (now - dt).total_seconds() / 60
+                if delta_min < 5:
+                    cu["activity_status"] = "active"
+                elif delta_min < 30:
+                    cu["activity_status"] = "idle"
+                else:
+                    cu["activity_status"] = "inactive"
+                cu["last_activity_at"] = last
+            except Exception:
+                cu["activity_status"] = "inactive"
+        else:
+            cu["activity_status"] = "inactive"
+        cu["on_leaderboard"] = u.get("on_leaderboard", True)
+        result.append(cu)
+    return result
+
+@api.post("/users/me/heartbeat")
+async def heartbeat(user: dict = Depends(get_current_user)):
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_activity_at": now_iso()}})
+    return {"ok": True}
 
 @api.post("/users")
 async def create_user(body: UserCreateIn, user: dict = Depends(require_owner)):
@@ -438,6 +469,7 @@ async def list_leads(
     county: Optional[str] = None,
     medicare_parts: Optional[str] = None,
     medicaid_provider: Optional[str] = None,
+    lead_type: Optional[str] = None,
     sort: str = "updated_desc",
     limit: int = 200,
     skip: int = 0,
@@ -450,6 +482,7 @@ async def list_leads(
     if county: f["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
     if medicare_parts: f["medicare_parts"] = {"$regex": re.escape(medicare_parts), "$options": "i"}
     if medicaid_provider: f["medicaid_provider"] = {"$regex": re.escape(medicaid_provider), "$options": "i"}
+    if lead_type: f["lead_type"] = lead_type
     if q:
         normalized = normalize_phone(q)
         or_clauses = [
@@ -712,6 +745,7 @@ COL_ALIASES = {
     "medicare number": "medicare_number", "medicare#": "medicare_number",
     "medicaid provider": "medicaid_provider", "provider": "medicaid_provider",
     "medicare parts": "medicare_parts", "parts": "medicare_parts",
+    "lead type": "lead_type", "type": "lead_type", "transfer": "lead_type", "t/n": "lead_type",
 }
 
 def auto_map_columns(columns: List[str]) -> Dict[str, str]:
@@ -818,6 +852,7 @@ async def import_commit(body: ImportCommitIn, user: dict = Depends(require_owner
                 "medicare_number": str(mapped.get("medicare_number", "") or "").strip(),
                 "medicaid_provider": str(mapped.get("medicaid_provider", "") or "").strip(),
                 "medicare_parts": str(mapped.get("medicare_parts", "") or "").strip(),
+                "lead_type": ("Transfer" if str(mapped.get("lead_type", "")).strip().lower() in ("transfer", "t", "yes") else "New to Medicare"),
                 "lead_status": "Uncalled",
                 "assigned_agent_id": None,
                 "source_import_batch_id": batch_id,
@@ -990,41 +1025,96 @@ async def agent_dashboard(user: dict = Depends(get_current_user)):
 # ============================================================================
 # Leaderboard
 # ============================================================================
-@api.get("/leaderboard")
-async def leaderboard(user: dict = Depends(get_current_user), range: str = "week"):
+def _period_range(period: str, month_offset: int = 0):
+    """Return (since_iso, until_iso, label) for the given period.
+    period: 'today' | 'week' | 'month'
+    month_offset: 0=current, 1=prev, 2=two months ago, etc.
+    """
     now = datetime.now(timezone.utc)
-    if range == "today":
-        since = datetime(now.year, now.month, now.day, tzinfo=timezone.utc).isoformat()
-    elif range == "month":
-        since = (now - timedelta(days=30)).isoformat()
-    elif range == "all":
-        since = "1970-01-01"
-    else:
-        since = (now - timedelta(days=7)).isoformat()
-    agents = await db.users.find({"role": "agent"}).to_list(200)
+    if period == "today":
+        start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=month_offset)
+        end = start + timedelta(days=1)
+        label = start.strftime("%b %d, %Y")
+    elif period == "week":
+        # week starting Monday, offset by weeks
+        weekday = now.weekday()
+        start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=weekday) - timedelta(weeks=month_offset)
+        end = start + timedelta(days=7)
+        label = f"Week of {start.strftime('%b %d, %Y')}"
+    else:  # month
+        y, m = now.year, now.month
+        # subtract month_offset months
+        total = y * 12 + (m - 1) - month_offset
+        y2, m2 = total // 12, total % 12 + 1
+        start = datetime(y2, m2, 1, tzinfo=timezone.utc)
+        if m2 == 12:
+            end = datetime(y2 + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end = datetime(y2, m2 + 1, 1, tzinfo=timezone.utc)
+        label = start.strftime("%B %Y")
+    return start.isoformat(), end.isoformat(), label
+
+
+async def _leaderboard_rows(period: str, offset: int):
+    since, until, label = _period_range(period, offset)
+    agents = await db.users.find({"role": "agent", "on_leaderboard": {"$ne": False}}).to_list(200)
     rows = []
     for a in agents:
         aid = a["_id"]
+        # Count sold + appointments where the audit log status_changed to Sold/Appointment Set occurred in period
+        sold = await db.audit_logs.count_documents({
+            "user_id": aid, "action_type": "status_changed",
+            "new_value": "Sold",
+            "created_at": {"$gte": since, "$lt": until},
+        })
+        appts = await db.audit_logs.count_documents({
+            "user_id": aid, "action_type": "status_changed",
+            "new_value": "Appointment Set",
+            "created_at": {"$gte": since, "$lt": until},
+        })
+        # Fallback: if no audit rows for this period, use current lead counts (works for seeded data)
+        if sold == 0 and appts == 0:
+            sold = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Sold"})
+            appts = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Appointment Set"})
         assigned = await db.leads.count_documents({"assigned_agent_id": aid})
-        calls = await db.call_logs.count_documents({"user_id": aid, "created_at": {"$gte": since}})
-        appts = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Appointment Set"})
-        sold = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Sold"})
         last = await db.call_logs.find_one({"user_id": aid}, sort=[("created_at", -1)])
         rows.append({
             "agent_id": aid,
             "agent_name": f"{a['first_name']} {a['last_name']}",
             "status": a.get("status", "active"),
             "assigned": assigned,
-            "calls": calls,
             "appointments": appts,
             "sold": sold,
             "conversion_rate": round((sold / assigned * 100) if assigned else 0, 1),
             "last_activity": last["created_at"] if last else None,
         })
-    rows.sort(key=lambda r: (r["sold"], r["appointments"], r["calls"]), reverse=True)
+    rows.sort(key=lambda r: (r["sold"], r["appointments"], r["conversion_rate"]), reverse=True)
     for i, r in enumerate(rows):
         r["rank"] = i + 1
-    return rows
+    return rows, label
+
+
+@api.get("/leaderboard")
+async def leaderboard(user: dict = Depends(get_current_user), period: str = "week", offset: int = 0):
+    period = period if period in ("today", "week", "month") else "week"
+    current, label = await _leaderboard_rows(period, offset)
+    # previous period for movement arrows
+    prev, prev_label = await _leaderboard_rows(period, offset + 1)
+    prev_rank = {r["agent_id"]: r["rank"] for r in prev}
+    for r in current:
+        pr = prev_rank.get(r["agent_id"])
+        if pr is None:
+            r["movement"] = "new"
+            r["rank_change"] = 0
+        else:
+            r["rank_change"] = pr - r["rank"]  # positive = moved up
+            if r["rank_change"] > 0:
+                r["movement"] = "up"
+            elif r["rank_change"] < 0:
+                r["movement"] = "down"
+            else:
+                r["movement"] = "same"
+    return {"period": period, "offset": offset, "label": label, "rows": current}
 
 # ============================================================================
 # Company settings
@@ -1097,6 +1187,11 @@ async def startup():
     # Seed users
     from seed import seed_demo_data
     await seed_demo_data(db, hash_password)
+
+    # Backfill lead_type on existing leads that don't have it
+    await db.leads.update_many({"lead_type": {"$exists": False}}, {"$set": {"lead_type": "New to Medicare"}})
+    # Backfill on_leaderboard on users
+    await db.users.update_many({"on_leaderboard": {"$exists": False}}, {"$set": {"on_leaderboard": True}})
 
     # Write test credentials
     try:

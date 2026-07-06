@@ -24,10 +24,9 @@ const TARGET_FIELDS = [
   { v: "city_state_zip", l: "City State Zip (combined)" },
   { v: "county", l: "County" },
   { v: "phone_number", l: "Phone Number" },
-  { v: "medicaid_number", l: "Medicaid Number" },
-  { v: "medicare_number", l: "Medicare Number" },
   { v: "medicaid_provider", l: "Medicaid Provider" },
   { v: "medicare_parts", l: "Medicare Parts" },
+  { v: "lead_type", l: "Lead Type (Transfer / New)" },
 ];
 
 export default function ImportLeads() {

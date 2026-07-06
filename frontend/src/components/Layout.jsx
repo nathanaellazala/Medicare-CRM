@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { NavLink, useNavigate, Outlet } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { api } from "@/lib/api";
 import {
   LayoutDashboard, Users, Upload, UserCog, Shuffle, Copy,
   Trophy, BarChart3, Settings, LogOut, Search, Bell, Briefcase,
@@ -35,8 +36,48 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
+  const lastActivityRef = useRef(Date.now());
   const nav = user?.role === "owner" ? ownerNav : agentNav;
   const leadsPath = user?.role === "owner" ? "/leads" : "/my-leads";
+
+  // Activity tracking: send heartbeat on user activity; auto sign out after 30 min idle
+  useEffect(() => {
+    if (!user) return;
+    const bump = () => { lastActivityRef.current = Date.now(); };
+    ["mousemove", "keydown", "click", "scroll", "touchstart"].forEach((ev) =>
+      window.addEventListener(ev, bump, { passive: true })
+    );
+
+    // Heartbeat every 60s (only if there was recent activity)
+    const heartbeat = setInterval(() => {
+      const secondsSince = (Date.now() - lastActivityRef.current) / 1000;
+      if (secondsSince < 90) {
+        api.post("/users/me/heartbeat").catch(() => {});
+      }
+    }, 60000);
+
+    // Idle check every 30s — auto-logout after 30 min
+    const idleCheck = setInterval(async () => {
+      const minutes = (Date.now() - lastActivityRef.current) / 60000;
+      if (minutes >= 30) {
+        clearInterval(heartbeat); clearInterval(idleCheck);
+        await logout();
+        navigate("/login");
+      }
+    }, 30000);
+
+    // Send one immediately on mount
+    api.post("/users/me/heartbeat").catch(() => {});
+
+    return () => {
+      ["mousemove", "keydown", "click", "scroll", "touchstart"].forEach((ev) =>
+        window.removeEventListener(ev, bump)
+      );
+      clearInterval(heartbeat);
+      clearInterval(idleCheck);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const initials = `${user?.first_name?.[0] || ""}${user?.last_name?.[0] || ""}`;
 
@@ -107,7 +148,7 @@ export default function Layout() {
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <Input
               data-testid="global-search"
-              placeholder="Search leads by name, phone, Medicare, county..."
+              placeholder="Search leads by name, phone, county..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={onSearch}

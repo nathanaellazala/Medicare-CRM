@@ -9,7 +9,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { UserPlus, KeyRound, Power, CheckCircle } from "lucide-react";
+import { UserPlus, KeyRound, Power, CheckCircle, Trophy, Circle } from "lucide-react";
 
 export default function Agents() {
   const [agents, setAgents] = useState([]);
@@ -38,6 +38,14 @@ export default function Agents() {
     try {
       await api.patch(`/users/${a.id}`, { status: a.status === "active" ? "inactive" : "active" });
       toast.success("Updated");
+      load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const toggleLeaderboard = async (a) => {
+    try {
+      await api.patch(`/users/${a.id}`, { on_leaderboard: !a.on_leaderboard });
+      toast.success(a.on_leaderboard ? "Removed from leaderboard" : "Added to leaderboard");
       load();
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
@@ -102,24 +110,51 @@ export default function Agents() {
             <tr className="text-left">
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Email</th>
-              <th className="px-4 py-3">Role</th>
+              <th className="px-4 py-3">Activity</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Leaderboard</th>
               <th className="px-4 py-3">Last login</th>
               <th className="px-4 py-3 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {agents.map((a) => (
+            {agents.map((a) => {
+              const act = a.activity_status || "inactive";
+              const actColor = act === "active" ? "text-green-600" : act === "idle" ? "text-amber-500" : "text-slate-400";
+              const actLabel = act === "active" ? "Active now" : act === "idle" ? "Idle" : "Inactive";
+              return (
               <tr key={a.id} data-testid={`agent-row-${a.id}`}>
                 <td className="px-4 py-3 text-sm font-medium text-slate-900">{a.first_name} {a.last_name}</td>
                 <td className="px-4 py-3 text-sm text-slate-700">{a.email}</td>
-                <td className="px-4 py-3 text-sm text-slate-700 capitalize">{a.role}</td>
+                <td className="px-4 py-3 text-sm">
+                  <span className={`inline-flex items-center gap-1.5 ${actColor}`} data-testid={`activity-${a.id}`}>
+                    <Circle size={8} className="fill-current"/>
+                    {actLabel}
+                  </span>
+                </td>
                 <td className="px-4 py-3">
                   <span className={`text-xs px-2 py-0.5 rounded-full border ${
                     a.status === "active"
                       ? "bg-green-50 text-green-700 border-green-200"
                       : "bg-slate-100 text-slate-600 border-slate-200"
                   }`}>{a.status}</span>
+                </td>
+                <td className="px-4 py-3">
+                  {a.role === "owner" ? (
+                    <span className="text-xs text-slate-400">—</span>
+                  ) : (
+                    <button
+                      onClick={() => toggleLeaderboard(a)}
+                      data-testid={`lb-toggle-${a.id}`}
+                      className={`text-xs px-2 py-0.5 rounded-full border inline-flex items-center gap-1 hover:opacity-80 ${
+                        a.on_leaderboard !== false
+                          ? "bg-amber-50 text-amber-800 border-amber-200"
+                          : "bg-slate-100 text-slate-500 border-slate-200"
+                      }`}
+                    >
+                      <Trophy size={10}/> {a.on_leaderboard !== false ? "Visible" : "Hidden"}
+                    </button>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-xs text-slate-500">
                   {a.last_login_at ? new Date(a.last_login_at).toLocaleString() : "Never"}
@@ -137,7 +172,8 @@ export default function Agents() {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </Card>
