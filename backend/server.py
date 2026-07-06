@@ -1176,20 +1176,20 @@ async def startup():
     await db.call_logs.create_index("user_id")
     await db.audit_logs.create_index("entity_id")
 
-    # One-time production launch cleanup — runs exactly once per environment.
-    # Wipes leftover demo seed (owner@healthexpertscrm.com + agent1-3 + 50 leads)
-    # so the app boots into a clean, launch-ready state with only the Henry owner.
-    marker = await db.system_meta.find_one({"_id": "launch_cleanup_v1"})
+    # One-time production launch cleanup — runs exactly once per marker version.
+    # v2: re-runs to wipe the stale owner@healthexpertscrm.com account so the
+    # hardcoded Henry seed can create the correct owner.
+    marker = await db.system_meta.find_one({"_id": "launch_cleanup_v2"})
     if not marker:
         demo_owner = await db.users.find_one({"email": "owner@healthexpertscrm.com"})
         demo_agents = await db.users.count_documents({"email": {"$regex": r"^agent\d@healthexpertscrm\.com$"}})
         if demo_owner or demo_agents > 0:
-            logger.info("Launch cleanup: wiping demo data (owner=%s, demo_agents=%s)", bool(demo_owner), demo_agents)
+            logger.info("Launch cleanup v2: wiping demo data (owner=%s, demo_agents=%s)", bool(demo_owner), demo_agents)
             for col in ("users", "leads", "notes", "call_logs", "audit_logs",
                         "import_batches", "lead_statuses", "company_settings"):
                 await db[col].delete_many({})
         await db.system_meta.insert_one({
-            "_id": "launch_cleanup_v1",
+            "_id": "launch_cleanup_v2",
             "ran_at": now_iso(),
         })
 
