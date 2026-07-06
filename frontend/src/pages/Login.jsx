@@ -11,8 +11,8 @@ import { toast } from "sonner";
 export default function Login() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("owner@healthexpertscrm.com");
-  const [password, setPassword] = useState("Password123!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -55,9 +55,9 @@ export default function Login() {
           </p>
           <div className="grid grid-cols-3 gap-4 pt-8 border-t border-white/15">
             {[
-              { n: "50+", l: "Demo leads" },
-              { n: "4", l: "Demo accounts" },
-              { n: "12+", l: "Lead statuses" },
+              { n: "Fast", l: "Import & assign" },
+              { n: "Live", l: "Team leaderboard" },
+              { n: "Secure", l: "Role-based access" },
             ].map((s) => (
               <div key={s.l}>
                 <div className="font-heading text-2xl font-semibold">{s.n}</div>
@@ -132,17 +132,6 @@ export default function Login() {
               {loading ? <Loader2 size={16} className="animate-spin" /> : "Sign in"}
             </Button>
           </form>
-
-          <div className="mt-8 p-4 rounded-md bg-slate-50 border border-slate-200">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-2">
-              Demo accounts
-            </div>
-            <div className="space-y-1 text-xs text-slate-600">
-              <div><span className="font-medium text-slate-800">Owner:</span> owner@healthexpertscrm.com</div>
-              <div><span className="font-medium text-slate-800">Agent:</span> agent1@healthexpertscrm.com</div>
-              <div><span className="font-medium text-slate-800">Password:</span> Password123!</div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
