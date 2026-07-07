@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, formatApiError } from "@/lib/api";
+import { api, formatApiError, formatBirthdate } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -112,7 +112,7 @@ export default function BookOfBusiness() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.phone_number || "—"}</td>
-                  <td className="px-4 py-3 text-sm text-slate-700">{lead.birthdate || "—"}</td>
+                  <td className="px-4 py-3 text-sm text-slate-700">{formatBirthdate(lead.birthdate) || "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.city ? `${lead.city}, ${lead.state}` : "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.medicaid_provider || "—"}</td>
                   <td className="px-4 py-3 text-xs text-slate-500">

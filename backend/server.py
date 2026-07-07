@@ -183,12 +183,22 @@ def format_phone(p: Optional[str]) -> str:
     return p or ""
 
 def parse_birthdate(s: Any) -> Optional[str]:
-    if not s or (isinstance(s, float) and pd.isna(s)):
+    if s is None or (isinstance(s, float) and pd.isna(s)):
         return None
+    # pandas Timestamp / datetime / date
     if isinstance(s, (datetime, date)):
         return s.strftime("%Y-%m-%d")
+    if isinstance(s, pd.Timestamp):
+        return s.strftime("%Y-%m-%d")
     s = str(s).strip()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%d/%m/%Y", "%m/%d/%y"):
+    if not s:
+        return None
+    # Strip trailing time part from Excel datetime strings ("1961-01-22 00:00:00")
+    if " " in s:
+        s = s.split(" ", 1)[0]
+    if "T" in s:
+        s = s.split("T", 1)[0]
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%d/%m/%Y", "%m/%d/%y", "%m-%d-%y"):
         try:
             return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
         except Exception:
@@ -328,6 +338,7 @@ class ImportCommitIn(BaseModel):
     assignment_method: Literal["unassigned", "round_robin"] = "unassigned"
     agent_ids: List[str] = []
     file_name: str = "import.csv"
+    lead_type: Literal["New to Medicare", "Transfer"] = "New to Medicare"
 
 # ============================================================================
 # Auth Endpoints
@@ -837,15 +848,20 @@ async def import_preview(file: UploadFile = File(...), _: dict = Depends(require
     df = df.where(pd.notnull(df), None)
     columns = [str(c) for c in df.columns.tolist()]
     rows = df.head(500).to_dict(orient="records")
-    # normalize to strings
+    # normalize to strings; datetime cells → "YYYY-MM-DD" so previews are clean
     norm_rows = []
     for r in rows:
         nr = {}
         for k, v in r.items():
             if v is None or (isinstance(v, float) and pd.isna(v)):
                 nr[str(k)] = ""
+            elif isinstance(v, (datetime, pd.Timestamp)):
+                try:
+                    nr[str(k)] = v.strftime("%Y-%m-%d")
+                except Exception:
+                    nr[str(k)] = str(v)
             else:
-                nr[str(k)] = v if not isinstance(v, (datetime, pd.Timestamp)) else str(v)
+                nr[str(k)] = v
         norm_rows.append(nr)
     return {
         "columns": columns,
@@ -919,7 +935,7 @@ async def import_commit(body: ImportCommitIn, user: dict = Depends(require_owner
                 "medicare_number": str(mapped.get("medicare_number", "") or "").strip(),
                 "medicaid_provider": str(mapped.get("medicaid_provider", "") or "").strip(),
                 "medicare_parts": str(mapped.get("medicare_parts", "") or "").strip(),
-                "lead_type": ("Transfer" if str(mapped.get("lead_type", "")).strip().lower() in ("transfer", "t", "yes") else "New to Medicare"),
+                "lead_type": body.lead_type,
                 "lead_status": "Uncalled",
                 "assigned_agent_id": None,
                 "source_import_batch_id": batch_id,

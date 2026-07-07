@@ -28,7 +28,6 @@ const TARGET_FIELDS = [
   { v: "medicare_number", l: "Medicare Number" },
   { v: "medicaid_provider", l: "Medicaid Provider / Plan" },
   { v: "medicare_parts", l: "Medicare Parts" },
-  { v: "lead_type", l: "Lead Type (Transfer / New)" },
 ];
 
 export default function ImportLeads() {
@@ -39,6 +38,7 @@ export default function ImportLeads() {
   const [mapping, setMapping] = useState({});
   const [duplicateHandling, setDuplicateHandling] = useState("skip");
   const [assignmentMethod, setAssignmentMethod] = useState("unassigned");
+  const [leadType, setLeadType] = useState("New to Medicare");
   const [agentIds, setAgentIds] = useState([]);
   const [agents, setAgents] = useState([]);
   const [result, setResult] = useState(null);
@@ -74,6 +74,7 @@ export default function ImportLeads() {
         duplicate_handling: duplicateHandling,
         assignment_method: assignmentMethod,
         agent_ids: agentIds,
+        lead_type: leadType,
         file_name: preview.filename || "import.csv",
       });
       setResult(data);
@@ -173,6 +174,42 @@ export default function ImportLeads() {
 
           <Card className="p-5 mb-4 border-slate-200 rounded-md shadow-sm">
             <h3 className="font-heading text-sm font-semibold text-slate-900 mb-3">Options</h3>
+
+            <div className="mb-5">
+              <Label className="text-xs">Lead type — applies to every row in this upload</Label>
+              <div className="grid grid-cols-2 gap-2 mt-1.5">
+                {[
+                  { v: "New to Medicare", desc: "First-time enrollees" },
+                  { v: "Transfer", desc: "Switching from another plan" },
+                ].map((opt) => (
+                  <button
+                    key={opt.v}
+                    type="button"
+                    onClick={() => setLeadType(opt.v)}
+                    data-testid={`lead-type-${opt.v === "Transfer" ? "transfer" : "new"}`}
+                    className={`text-left p-3 rounded-md border-2 transition-colors ${
+                      leadType === opt.v
+                        ? "border-[#026AA2] bg-sky-50"
+                        : "border-slate-200 hover:border-slate-300 bg-white"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 ${
+                        leadType === opt.v ? "border-[#026AA2]" : "border-slate-300"
+                      }`}>
+                        {leadType === opt.v && <div className="w-full h-full rounded-full bg-[#026AA2] scale-50"/>}
+                      </div>
+                      <div className="font-semibold text-sm text-slate-900">{opt.v}</div>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1 ml-5">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-2">
+                All {preview.total_rows} leads in this file will be labeled <strong>{leadType}</strong>. Agents can filter by type in the Leads page.
+              </p>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
                 <Label className="text-xs">Duplicate handling</Label>

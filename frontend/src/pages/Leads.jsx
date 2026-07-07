@@ -308,7 +308,7 @@ export default function Leads() {
                     <div className="font-medium text-slate-900 text-sm">{lead.full_name || "—"}</div>
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.phone_number || "—"}</td>
-                  <td className="px-4 py-3 text-sm text-slate-700">{lead.birthdate || "—"}</td>
+                  <td className="px-4 py-3 text-sm text-slate-700">{formatBirthdate(lead.birthdate) || "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.county || "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-700">
                     {lead.city ? `${lead.city}, ${lead.state}` : "—"}
