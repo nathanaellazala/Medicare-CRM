@@ -1056,15 +1056,22 @@ async def owner_dashboard(_: dict = Depends(require_owner)):
     async for g in db.leads.aggregate([{"$group": {"_id": "$lead_status", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}]):
         by_status.append({"status": g["_id"], "count": g["count"]})
 
-    # leads by agent
+    # leads by agent — batch-fetch users to avoid N+1
     by_agent = []
+    agent_groups = []
     async for g in db.leads.aggregate([
         {"$match": {"assigned_agent_id": {"$ne": None}}},
         {"$group": {"_id": "$assigned_agent_id", "count": {"$sum": 1}}}
     ]):
-        u = await db.users.find_one({"_id": g["_id"]})
-        if u:
-            by_agent.append({"agent_id": g["_id"], "agent_name": f"{u['first_name']} {u['last_name']}", "count": g["count"]})
+        agent_groups.append(g)
+    if agent_groups:
+        agent_ids = [g["_id"] for g in agent_groups]
+        users = await db.users.find({"_id": {"$in": agent_ids}}).to_list(len(agent_ids))
+        users_map = {u["_id"]: u for u in users}
+        for g in agent_groups:
+            u = users_map.get(g["_id"])
+            if u:
+                by_agent.append({"agent_id": g["_id"], "agent_name": f"{u['first_name']} {u['last_name']}", "count": g["count"]})
 
     return {
         "cards": {
@@ -1141,26 +1148,51 @@ def _period_range(period: str, month_offset: int = 0):
 async def _leaderboard_rows(period: str, offset: int):
     since, until, label = _period_range(period, offset)
     agents = await db.users.find({"role": "agent", "on_leaderboard": {"$ne": False}}).to_list(200)
+    if not agents:
+        return [], label
+    agent_ids = [a["_id"] for a in agents]
+
+    # Batch aggregations — one query per metric instead of per-agent loops
+    audit_agg = {}
+    async for g in db.audit_logs.aggregate([
+        {"$match": {
+            "user_id": {"$in": agent_ids},
+            "action_type": "status_changed",
+            "new_value": {"$in": ["Complete", "Appointment Set"]},
+            "created_at": {"$gte": since, "$lt": until},
+        }},
+        {"$group": {"_id": {"user_id": "$user_id", "new_value": "$new_value"}, "count": {"$sum": 1}}},
+    ]):
+        audit_agg[(g["_id"]["user_id"], g["_id"]["new_value"])] = g["count"]
+
+    lead_status_agg = {}
+    lead_assigned_agg = {}
+    async for g in db.leads.aggregate([
+        {"$match": {"assigned_agent_id": {"$in": agent_ids}}},
+        {"$group": {"_id": {"agent": "$assigned_agent_id", "status": "$lead_status"}, "count": {"$sum": 1}}},
+    ]):
+        aid = g["_id"]["agent"]
+        lead_status_agg[(aid, g["_id"]["status"])] = g["count"]
+        lead_assigned_agg[aid] = lead_assigned_agg.get(aid, 0) + g["count"]
+
+    last_call_map = {}
+    async for g in db.call_logs.aggregate([
+        {"$match": {"user_id": {"$in": agent_ids}}},
+        {"$sort": {"created_at": -1}},
+        {"$group": {"_id": "$user_id", "last": {"$first": "$created_at"}}},
+    ]):
+        last_call_map[g["_id"]] = g["last"]
+
     rows = []
     for a in agents:
         aid = a["_id"]
-        # Count sold + appointments where the audit log status_changed to Sold/Appointment Set occurred in period
-        sold = await db.audit_logs.count_documents({
-            "user_id": aid, "action_type": "status_changed",
-            "new_value": "Complete",
-            "created_at": {"$gte": since, "$lt": until},
-        })
-        appts = await db.audit_logs.count_documents({
-            "user_id": aid, "action_type": "status_changed",
-            "new_value": "Appointment Set",
-            "created_at": {"$gte": since, "$lt": until},
-        })
-        # Fallback: if no audit rows for this period, use current lead counts (works for seeded data)
+        sold = audit_agg.get((aid, "Complete"), 0)
+        appts = audit_agg.get((aid, "Appointment Set"), 0)
+        # Fallback: if no audit rows in this period, use current lead counts (works for seeded data)
         if sold == 0 and appts == 0:
-            sold = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Complete"})
-            appts = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Appointment Set"})
-        assigned = await db.leads.count_documents({"assigned_agent_id": aid})
-        last = await db.call_logs.find_one({"user_id": aid}, sort=[("created_at", -1)])
+            sold = lead_status_agg.get((aid, "Complete"), 0)
+            appts = lead_status_agg.get((aid, "Appointment Set"), 0)
+        assigned = lead_assigned_agg.get(aid, 0)
         rows.append({
             "agent_id": aid,
             "agent_name": f"{a['first_name']} {a['last_name']}",
@@ -1169,7 +1201,7 @@ async def _leaderboard_rows(period: str, offset: int):
             "appointments": appts,
             "sold": sold,
             "conversion_rate": round((sold / assigned * 100) if assigned else 0, 1),
-            "last_activity": last["created_at"] if last else None,
+            "last_activity": last_call_map.get(aid),
         })
     rows.sort(key=lambda r: (r["sold"], r["appointments"], r["conversion_rate"]), reverse=True)
     for i, r in enumerate(rows):
