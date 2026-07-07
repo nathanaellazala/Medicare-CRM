@@ -71,6 +71,41 @@ CALL_RESULTS = [
     "Call Back Later", "Other",
 ]
 
+# Fields the owner can hide/show per agent. Not included: name, lead_status,
+# assigned_agent, updated_at, appointment_at, notes, call logs (always visible).
+TOGGLEABLE_FIELDS = [
+    {"key": "birthdate",         "label": "Birthdate"},
+    {"key": "phone_number",      "label": "Phone number"},
+    {"key": "address",           "label": "Street address"},
+    {"key": "city",              "label": "City"},
+    {"key": "state",             "label": "State"},
+    {"key": "zip_code",          "label": "Zip code"},
+    {"key": "county",            "label": "County"},
+    {"key": "medicare_number",   "label": "Medicare number"},
+    {"key": "medicaid_number",   "label": "Medicaid number"},
+    {"key": "medicaid_provider", "label": "Medicaid provider"},
+    {"key": "medicare_parts",    "label": "Medicare parts"},
+    {"key": "lead_type",         "label": "Lead type"},
+]
+DEFAULT_VISIBLE_FIELDS = [f["key"] for f in TOGGLEABLE_FIELDS]
+
+
+def mask_lead_for_user(lead: dict, user: dict) -> dict:
+    """Blank out fields the agent is not permitted to see. Owners see everything."""
+    if not lead or user.get("role") == "owner":
+        return lead
+    visible = user.get("visible_fields")
+    if visible is None:
+        return lead  # legacy users: full visibility
+    masked = dict(lead)
+    for f in DEFAULT_VISIBLE_FIELDS:
+        if f not in visible and f in masked:
+            masked[f] = ""
+    # Normalized phone is derived; also mask if phone is hidden
+    if "phone_number" not in visible:
+        masked["normalized_phone_number"] = ""
+    return masked
+
 # ============================================================================
 # Auth helpers
 # ============================================================================
@@ -215,6 +250,7 @@ class UserUpdateIn(BaseModel):
     email: Optional[EmailStr] = None
     status: Optional[Literal["active", "inactive"]] = None
     on_leaderboard: Optional[bool] = None
+    visible_fields: Optional[List[str]] = None
 
 class PasswordResetIn(BaseModel):
     password: str
@@ -388,6 +424,8 @@ async def create_user(body: UserCreateIn, user: dict = Depends(require_owner)):
         "password_hash": hash_password(body.password),
         "role": body.role,
         "status": "active",
+        "on_leaderboard": True,
+        "visible_fields": list(DEFAULT_VISIBLE_FIELDS),
         "created_at": now_iso(),
         "updated_at": now_iso(),
         "last_login_at": None,
@@ -510,7 +548,7 @@ async def list_leads(
     sort_spec = sort_map.get(sort, [("updated_at", -1)])
     total = await db.leads.count_documents(f)
     items = await db.leads.find(f).sort(sort_spec).skip(skip).limit(limit).to_list(limit)
-    return {"total": total, "items": [clean_doc(d) for d in items]}
+    return {"total": total, "items": [mask_lead_for_user(clean_doc(d), user) for d in items]}
 
 @api.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
@@ -518,7 +556,7 @@ async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
     lead = await db.leads.find_one(f)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    return clean_doc(lead)
+    return mask_lead_for_user(clean_doc(lead), user)
 
 @api.post("/leads")
 async def create_lead(body: LeadIn, user: dict = Depends(require_owner)):
@@ -1178,6 +1216,10 @@ async def update_company(body: dict, user: dict = Depends(require_owner)):
 async def call_results(_: dict = Depends(get_current_user)):
     return CALL_RESULTS
 
+@api.get("/constants/toggleable-fields")
+async def toggleable_fields(_: dict = Depends(get_current_user)):
+    return TOGGLEABLE_FIELDS
+
 # ============================================================================
 # App wiring
 # ============================================================================
@@ -1229,6 +1271,11 @@ async def startup():
     await db.leads.update_many({"lead_type": {"$exists": False}}, {"$set": {"lead_type": "New to Medicare"}})
     # Backfill on_leaderboard on users
     await db.users.update_many({"on_leaderboard": {"$exists": False}}, {"$set": {"on_leaderboard": True}})
+    # Backfill visible_fields (default: all toggleable fields visible)
+    await db.users.update_many(
+        {"visible_fields": {"$exists": False}},
+        {"$set": {"visible_fields": list(DEFAULT_VISIBLE_FIELDS)}},
+    )
 
     # Write test credentials
     try:

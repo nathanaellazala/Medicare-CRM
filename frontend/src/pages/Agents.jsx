@@ -4,17 +4,21 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { UserPlus, KeyRound, Power, CheckCircle, Trophy, Circle } from "lucide-react";
+import { UserPlus, KeyRound, Power, CheckCircle, Trophy, Circle, ShieldCheck } from "lucide-react";
 
 export default function Agents() {
   const [agents, setAgents] = useState([]);
   const [openCreate, setOpenCreate] = useState(false);
   const [openReset, setOpenReset] = useState(null);
+  const [openPerms, setOpenPerms] = useState(null); // agent object
+  const [permFields, setPermFields] = useState([]); // {key,label}[]
+  const [permSelected, setPermSelected] = useState([]);
   const [form, setForm] = useState({ first_name: "", last_name: "", email: "", password: "" });
   const [newPassword, setNewPassword] = useState("");
 
@@ -22,7 +26,31 @@ export default function Agents() {
     const { data } = await api.get("/users");
     setAgents(data);
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    api.get("/constants/toggleable-fields").then((r) => setPermFields(r.data)).catch(() => {});
+  }, []);
+
+  const openPermissions = (a) => {
+    setOpenPerms(a);
+    setPermSelected(a.visible_fields || permFields.map((f) => f.key));
+  };
+
+  const togglePerm = (key) => {
+    setPermSelected((s) => s.includes(key) ? s.filter((k) => k !== key) : [...s, key]);
+  };
+
+  const savePermissions = async () => {
+    try {
+      await api.patch(`/users/${openPerms.id}`, { visible_fields: permSelected });
+      toast.success(`Access updated for ${openPerms.first_name}`);
+      setOpenPerms(null);
+      load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const selectAll = () => setPermSelected(permFields.map((f) => f.key));
+  const selectNone = () => setPermSelected([]);
 
   const createAgent = async () => {
     try {
@@ -124,7 +152,19 @@ export default function Agents() {
               const actLabel = act === "active" ? "Active now" : act === "idle" ? "Idle" : "Inactive";
               return (
               <tr key={a.id} data-testid={`agent-row-${a.id}`}>
-                <td className="px-4 py-3 text-sm font-medium text-slate-900">{a.first_name} {a.last_name}</td>
+                <td className="px-4 py-3 text-sm font-medium text-slate-900">
+                  {a.role === "owner" ? (
+                    <span>{a.first_name} {a.last_name}</span>
+                  ) : (
+                    <button
+                      onClick={() => openPermissions(a)}
+                      className="text-slate-900 hover:text-[#026AA2] hover:underline text-left"
+                      data-testid={`agent-name-${a.id}`}
+                    >
+                      {a.first_name} {a.last_name}
+                    </button>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-sm text-slate-700">{a.email}</td>
                 <td className="px-4 py-3 text-sm">
                   <span className={`inline-flex items-center gap-1.5 ${actColor}`} data-testid={`activity-${a.id}`}>
@@ -161,6 +201,16 @@ export default function Agents() {
                 </td>
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
+                    {a.role !== "owner" && (
+                      <Button
+                        onClick={() => openPermissions(a)}
+                        className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-sky-50 hover:text-[#026AA2] hover:border-[#026AA2]"
+                        title="Manage access to lead fields"
+                        data-testid={`perms-${a.id}`}
+                      >
+                        <ShieldCheck size={12}/>
+                      </Button>
+                    )}
                     <Button onClick={() => setOpenReset(a)} className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" data-testid={`reset-${a.id}`}>
                       <KeyRound size={12}/>
                     </Button>
@@ -188,6 +238,53 @@ export default function Agents() {
           <DialogFooter>
             <Button onClick={() => setOpenReset(null)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</Button>
             <Button onClick={resetPassword} className="text-white" style={{ background: "#026AA2" }} data-testid="confirm-reset">Reset</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage access modal */}
+      <Dialog open={!!openPerms} onOpenChange={(o) => { if (!o) setOpenPerms(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldCheck size={16} className="text-[#026AA2]"/>
+              Lead access for {openPerms?.first_name} {openPerms?.last_name}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-slate-500 -mt-1">
+            Pick the fields this agent can see on their leads. Hidden fields are blanked out server-side —
+            they won't appear in the table, lead detail, search results, or API responses. Name, status, and
+            notes are always visible.
+          </p>
+          <div className="flex gap-2 mt-1 mb-2">
+            <button onClick={selectAll} className="text-xs text-[#026AA2] hover:underline" data-testid="perms-all">Select all</button>
+            <span className="text-xs text-slate-300">·</span>
+            <button onClick={selectNone} className="text-xs text-slate-500 hover:underline" data-testid="perms-none">Select none</button>
+            <span className="ml-auto text-xs text-slate-500">{permSelected.length} / {permFields.length}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 max-h-80 overflow-y-auto">
+            {permFields.map((f) => {
+              const active = permSelected.includes(f.key);
+              return (
+                <label key={f.key}
+                       className={`flex items-center gap-2 p-2.5 border rounded-md cursor-pointer transition-colors ${
+                         active ? "border-[#026AA2] bg-sky-50/50" : "border-slate-200 hover:bg-slate-50"
+                       }`}>
+                  <Checkbox
+                    checked={active}
+                    onCheckedChange={() => togglePerm(f.key)}
+                    data-testid={`perm-${f.key}`}
+                  />
+                  <span className="text-sm text-slate-800">{f.label}</span>
+                </label>
+              );
+            })}
+          </div>
+          <DialogFooter className="mt-3">
+            <Button onClick={() => setOpenPerms(null)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</Button>
+            <Button onClick={savePermissions} className="text-white" style={{ background: "#026AA2" }} data-testid="perms-save">
+              Save access
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

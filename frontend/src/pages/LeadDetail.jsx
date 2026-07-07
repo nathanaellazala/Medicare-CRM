@@ -307,6 +307,8 @@ export default function LeadDetail() {
             <Field label="City / State" value={lead.city ? `${lead.city}, ${lead.state}` : ""}/>
             <Field label="Zip" value={lead.zip_code}/>
             <Field label="County" value={lead.county}/>
+            <Field label="Medicare #" value={lead.medicare_number} copyable/>
+            <Field label="Medicaid #" value={lead.medicaid_number} copyable/>
             <Field label="Lead Type" value={lead.lead_type || "New to Medicare"}/>
             <Field label="Medicaid Provider" value={lead.medicaid_provider}/>
             <Field label="Medicare Parts" value={lead.medicare_parts}/>

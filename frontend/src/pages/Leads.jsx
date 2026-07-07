@@ -274,6 +274,8 @@ export default function Leads() {
                 <th className="px-4 py-3">Birthdate</th>
                 <th className="px-4 py-3">County</th>
                 <th className="px-4 py-3">City / State</th>
+                <th className="px-4 py-3">Medicare #</th>
+                <th className="px-4 py-3">Medicaid #</th>
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Status</th>
                 {isOwner && <th className="px-4 py-3">Agent</th>}
@@ -285,10 +287,10 @@ export default function Leads() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={isOwner ? 13 : 11} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
+                <tr><td colSpan={isOwner ? 15 : 13} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
               )}
               {!loading && items.length === 0 && (
-                <tr><td colSpan={isOwner ? 13 : 11} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
+                <tr><td colSpan={isOwner ? 15 : 13} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
               )}
               {!loading && items.map((lead) => (
                 <tr key={lead.id} className="cursor-pointer" data-testid={`lead-row-${lead.id}`}
@@ -311,6 +313,8 @@ export default function Leads() {
                   <td className="px-4 py-3 text-sm text-slate-700">
                     {lead.city ? `${lead.city}, ${lead.state}` : "—"}
                   </td>
+                  <td className="px-4 py-3 text-sm text-slate-700 font-mono text-xs">{lead.medicare_number || "—"}</td>
+                  <td className="px-4 py-3 text-sm text-slate-700 font-mono text-xs">{lead.medicaid_number || "—"}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs font-medium px-2 py-0.5 rounded border ${
                       lead.lead_type === "Transfer"
