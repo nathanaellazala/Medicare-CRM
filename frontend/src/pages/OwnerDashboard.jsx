@@ -46,9 +46,17 @@ export default function OwnerDashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [data, setData] = useState(null);
+  const [refreshedAt, setRefreshedAt] = useState(null);
 
   useEffect(() => {
-    api.get("/dashboard/owner").then((r) => setData(r.data)).catch(() => {});
+    const load = () => {
+      api.get("/dashboard/owner")
+        .then((r) => { setData(r.data); setRefreshedAt(new Date()); })
+        .catch(() => {});
+    };
+    load();
+    const iv = setInterval(load, 15000);
+    return () => clearInterval(iv);
   }, []);
 
   if (!data) {
@@ -67,7 +75,14 @@ export default function OwnerDashboard() {
           <h1 className="font-heading text-2xl font-semibold text-slate-900">
             Welcome back, {user?.first_name}
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Here's how your team is performing today.</p>
+          <p className="text-sm text-slate-500 mt-1">
+            Here's how your team is performing today.
+            {refreshedAt && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs text-slate-400">
+                · Auto-refreshing · last update {refreshedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </span>
+            )}
+          </p>
         </div>
         <div className="flex gap-2">
           <Button onClick={() => navigate("/import")} data-testid="quick-import" className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 h-9">
@@ -90,7 +105,7 @@ export default function OwnerDashboard() {
         <KPI icon={Users} label="Unassigned" value={c.unassigned} accent="#C2410C" testid="kpi-unassigned"/>
         <KPI icon={Phone} label="Uncalled" value={c.uncalled} accent="#64748B" testid="kpi-uncalled"/>
         <KPI icon={Calendar} label="Appointments" value={c.appointment_set} accent="#7E22CE" testid="kpi-appt"/>
-        <KPI icon={CheckCircle2} label="Sold" value={c.sold} accent="#15803D" testid="kpi-sold"/>
+        <KPI icon={CheckCircle2} label="Complete" value={c.sold} accent="#15803D" testid="kpi-sold"/>
         <KPI icon={XCircle} label="Not Interested" value={c.not_interested} accent="#B91C1C" testid="kpi-noi"/>
         <KPI icon={PhoneOff} label="No Answer" value={c.no_answer} accent="#854D0E" testid="kpi-noans"/>
         <KPI icon={CopyIcon} label="Duplicates" value={c.duplicate} accent="#475569" testid="kpi-dup"/>
@@ -148,7 +163,7 @@ export default function OwnerDashboard() {
             { label: "Uncalled", value: data.funnel.uncalled, color: "#94A3B8" },
             { label: "Contacted", value: data.funnel.contacted, color: "#0284C7" },
             { label: "Appointment Set", value: data.funnel.appointment_set, color: "#A855F7" },
-            { label: "Sold", value: data.funnel.sold, color: "#22C55E" },
+            { label: "Complete", value: data.funnel.sold, color: "#22C55E" },
           ].map((s) => (
             <div key={s.label} className="rounded-md border border-slate-200 p-4">
               <div className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">{s.label}</div>

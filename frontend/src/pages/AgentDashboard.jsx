@@ -52,7 +52,7 @@ export default function AgentDashboard() {
         <KPI icon={Phone} label="Uncalled" value={c.uncalled} accent="#64748B" testid="kpi-uncalled"/>
         <KPI icon={PhoneOff} label="No Answer" value={c.no_answer} accent="#854D0E" testid="kpi-noans"/>
         <KPI icon={Calendar} label="Appointments" value={c.appointment_set} accent="#7E22CE" testid="kpi-appt"/>
-        <KPI icon={CheckCircle2} label="Sold" value={c.sold} accent="#15803D" testid="kpi-sold"/>
+        <KPI icon={CheckCircle2} label="Complete" value={c.sold} accent="#15803D" testid="kpi-sold"/>
         <KPI icon={BarChart3} label="Calls Today" value={c.calls_today} accent="#026AA2" testid="kpi-calls-today"/>
         <KPI icon={BarChart3} label="Calls Week" value={c.calls_week} accent="#026AA2" testid="kpi-calls-week"/>
       </div>

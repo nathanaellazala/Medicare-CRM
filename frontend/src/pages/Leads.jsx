@@ -9,7 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import StatusBadge from "@/components/StatusBadge";
-import { Search, Filter, Download, Shuffle, ChevronRight, RefreshCw } from "lucide-react";
+import { Search, Filter, Download, Shuffle, ChevronRight, RefreshCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatApiError } from "@/lib/api";
 import {
@@ -47,13 +47,38 @@ export default function Leads() {
       if (leadType) qs.lead_type = leadType;
       if (sort) qs.sort = sort;
       const { data } = await api.get("/leads", { params: qs });
-      setItems(data.items);
-      setTotal(data.total);
+      // Hide "Complete" leads by default — they live in Book of Business.
+      // Only include them if the user explicitly filtered by "Complete".
+      const filtered = status === "Complete"
+        ? data.items
+        : data.items.filter((l) => l.lead_status !== "Complete");
+      setItems(filtered);
+      setTotal(filtered.length);
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
     } finally {
       setLoading(false);
     }
+  };
+
+  const deleteLead = async (id) => {
+    if (!window.confirm("Delete this lead? This cannot be undone.")) return;
+    try {
+      await api.delete(`/leads/${id}`);
+      toast.success("Lead deleted");
+      load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const bulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.length} leads? This cannot be undone.`)) return;
+    try {
+      const { data } = await api.post("/leads/bulk-delete", { lead_ids: selectedIds });
+      toast.success(`Deleted ${data.deleted} leads`);
+      setSelected({});
+      load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
   useEffect(() => {
@@ -226,6 +251,9 @@ export default function Leads() {
               </SelectContent>
             </Select>
             <Button onClick={bulkAssign} className="h-8 text-white" style={{ background: "#026AA2" }} data-testid="bulk-apply-assign">Assign</Button>
+            <Button onClick={bulkDelete} className="h-8 bg-red-600 hover:bg-red-700 text-white" data-testid="bulk-delete">
+              <Trash2 size={12} className="mr-1"/> Delete
+            </Button>
           </div>
           <Button onClick={() => setSelected({})} className="h-8 ml-auto bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Clear</Button>
         </div>
@@ -308,7 +336,20 @@ export default function Leads() {
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {lead.updated_at ? new Date(lead.updated_at).toLocaleDateString() : "—"}
                   </td>
-                  <td className="px-2 py-3 text-slate-400"><ChevronRight size={14}/></td>
+                  <td className="px-2 py-3 text-slate-400" onClick={(e) => e.stopPropagation()}>
+                    {isOwner ? (
+                      <button
+                        onClick={() => deleteLead(lead.id)}
+                        title="Delete lead"
+                        className="p-1 hover:bg-red-50 hover:text-red-600 rounded transition-colors"
+                        data-testid={`del-${lead.id}`}
+                      >
+                        <Trash2 size={13}/>
+                      </button>
+                    ) : (
+                      <ChevronRight size={14}/>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

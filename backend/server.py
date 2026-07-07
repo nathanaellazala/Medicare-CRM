@@ -59,7 +59,7 @@ DEFAULT_STATUSES = [
     {"name": "Appointment Set", "color": "purple", "sort_order": 10},
     {"name": "Application Started", "color": "indigo", "sort_order": 11},
     {"name": "Pending", "color": "teal", "sort_order": 12},
-    {"name": "Sold", "color": "green", "sort_order": 13},
+    {"name": "Complete", "color": "green", "sort_order": 13},
     {"name": "Do Not Call", "color": "black", "sort_order": 14},
     {"name": "Duplicate", "color": "slate", "sort_order": 15},
     {"name": "Ineligible", "color": "slate", "sort_order": 16},
@@ -67,7 +67,7 @@ DEFAULT_STATUSES = [
 
 CALL_RESULTS = [
     "No Answer", "Left Voicemail", "Spoke With Lead", "Not Interested",
-    "Appointment Set", "Sold", "Wrong Number", "Disconnected",
+    "Appointment Set", "Complete", "Wrong Number", "Disconnected",
     "Call Back Later", "Other",
 ]
 
@@ -235,6 +235,7 @@ class LeadIn(BaseModel):
     medicare_parts: Optional[str] = ""
     lead_type: Optional[Literal["New to Medicare", "Transfer"]] = "New to Medicare"
     lead_status: Optional[str] = "Uncalled"
+    appointment_at: Optional[str] = None
     assigned_agent_id: Optional[str] = None
 
 class LeadUpdateIn(BaseModel):
@@ -253,6 +254,7 @@ class LeadUpdateIn(BaseModel):
     medicare_parts: Optional[str] = None
     lead_type: Optional[Literal["New to Medicare", "Transfer"]] = None
     lead_status: Optional[str] = None
+    appointment_at: Optional[str] = None
     assigned_agent_id: Optional[str] = None
 
 class NoteIn(BaseModel):
@@ -612,6 +614,31 @@ async def round_robin(body: RoundRobinIn, user: dict = Depends(require_owner)):
         count += 1
     return {"assigned": count, "agents": len(body.agent_ids)}
 
+@api.post("/leads/bulk-delete")
+async def bulk_delete_leads(body: dict, user: dict = Depends(require_owner)):
+    ids = body.get("lead_ids", [])
+    if not ids:
+        raise HTTPException(400, "lead_ids required")
+    res = await db.leads.delete_many({"_id": {"$in": ids}})
+    await db.notes.delete_many({"lead_id": {"$in": ids}})
+    await db.call_logs.delete_many({"lead_id": {"$in": ids}})
+    for lid in ids:
+        await add_audit(user["_id"], "lead_deleted", "lead", lid)
+    return {"deleted": res.deleted_count}
+
+@api.get("/appointments/upcoming")
+async def upcoming_appointments(user: dict = Depends(get_current_user)):
+    """Leads with appointment_at scheduled in the next 30 minutes (scoped by role)."""
+    now = datetime.now(timezone.utc)
+    horizon = (now + timedelta(minutes=30)).isoformat()
+    f = {
+        "appointment_at": {"$gte": now.isoformat(), "$lte": horizon},
+        "lead_status": "Appointment Set",
+        **lead_scope_filter(user),
+    }
+    items = await db.leads.find(f).sort("appointment_at", 1).to_list(50)
+    return [clean_doc(d) for d in items]
+
 @api.get("/leads/export/csv")
 async def export_csv(
     user: dict = Depends(require_owner),
@@ -743,9 +770,11 @@ COL_ALIASES = {
     "phone": "phone_number", "phone number": "phone_number", "phone#": "phone_number",
     "medicaid number": "medicaid_number", "medicaid#": "medicaid_number",
     "medicare number": "medicare_number", "medicare#": "medicare_number",
-    "medicaid provider": "medicaid_provider", "provider": "medicaid_provider",
-    "medicare parts": "medicare_parts", "parts": "medicare_parts",
+    "medicaid provider": "medicaid_provider", "provider": "medicaid_provider", "medicaid plan": "medicaid_provider", "plan": "medicaid_provider",
+    "medicare parts": "medicare_parts", "parts": "medicare_parts", "medicare part": "medicare_parts",
     "lead type": "lead_type", "type": "lead_type", "transfer": "lead_type", "t/n": "lead_type",
+    "dob": "birthdate",
+    "status": "lead_status", "lead status": "lead_status", "state of lead": "lead_status",
 }
 
 def auto_map_columns(columns: List[str]) -> Dict[str, str]:
@@ -960,7 +989,7 @@ async def owner_dashboard(_: dict = Depends(require_owner)):
     assigned = total - unassigned
     uncalled = await db.leads.count_documents({"lead_status": "Uncalled"})
     appt = await db.leads.count_documents({"lead_status": "Appointment Set"})
-    sold = await db.leads.count_documents({"lead_status": "Sold"})
+    sold = await db.leads.count_documents({"lead_status": "Complete"})
     not_interested = await db.leads.count_documents({"lead_status": "Not Interested"})
     no_answer = await db.leads.count_documents({"lead_status": "No Answer"})
     dup = await db.leads.count_documents({"is_duplicate": True})
@@ -1011,7 +1040,7 @@ async def agent_dashboard(user: dict = Depends(get_current_user)):
     uncalled = await db.leads.count_documents({**f, "lead_status": "Uncalled"})
     no_answer = await db.leads.count_documents({**f, "lead_status": "No Answer"})
     appt = await db.leads.count_documents({**f, "lead_status": "Appointment Set"})
-    sold = await db.leads.count_documents({**f, "lead_status": "Sold"})
+    sold = await db.leads.count_documents({**f, "lead_status": "Complete"})
     calls_today = await db.call_logs.count_documents({"user_id": uid, "created_at": {"$gte": today_start}})
     calls_week = await db.call_logs.count_documents({"user_id": uid, "created_at": {"$gte": week_ago}})
     return {
@@ -1064,7 +1093,7 @@ async def _leaderboard_rows(period: str, offset: int):
         # Count sold + appointments where the audit log status_changed to Sold/Appointment Set occurred in period
         sold = await db.audit_logs.count_documents({
             "user_id": aid, "action_type": "status_changed",
-            "new_value": "Sold",
+            "new_value": "Complete",
             "created_at": {"$gte": since, "$lt": until},
         })
         appts = await db.audit_logs.count_documents({
@@ -1074,7 +1103,7 @@ async def _leaderboard_rows(period: str, offset: int):
         })
         # Fallback: if no audit rows for this period, use current lead counts (works for seeded data)
         if sold == 0 and appts == 0:
-            sold = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Sold"})
+            sold = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Complete"})
             appts = await db.leads.count_documents({"assigned_agent_id": aid, "lead_status": "Appointment Set"})
         assigned = await db.leads.count_documents({"assigned_agent_id": aid})
         last = await db.call_logs.find_one({"user_id": aid}, sort=[("created_at", -1)])
@@ -1179,6 +1208,10 @@ async def startup():
     # Launch cleanup intentionally disabled — user opted to keep the existing
     # owner@healthexpertscrm.com account on production. Do NOT re-enable
     # without confirming with the user first: it would wipe their real data.
+
+    # Migration: rename "Sold" → "Complete" everywhere (idempotent)
+    await db.lead_statuses.update_many({"name": "Sold"}, {"$set": {"name": "Complete"}})
+    await db.leads.update_many({"lead_status": "Sold"}, {"$set": {"lead_status": "Complete"}})
 
     # Seed statuses
     if await db.lead_statuses.count_documents({}) == 0:

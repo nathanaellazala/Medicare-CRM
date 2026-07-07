@@ -105,7 +105,7 @@ export default function Leaderboard() {
       {/* Period totals strip */}
       <div className="grid grid-cols-3 gap-3 mb-6">
         <div className="rounded-md border border-slate-200 bg-white p-4">
-          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Total Sold</div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Total Complete</div>
           <div className="font-heading text-3xl font-semibold text-emerald-600" data-testid="lb-total-sold">{totalSold}</div>
         </div>
         <div className="rounded-md border border-slate-200 bg-white p-4">
@@ -152,7 +152,7 @@ export default function Leaderboard() {
 
                     <div className="grid grid-cols-2 gap-2 mb-3">
                       <div className="rounded-md bg-white/70 p-2.5 backdrop-blur">
-                        <div className="text-[9px] uppercase tracking-wider text-slate-600 font-bold">Sold</div>
+                        <div className="text-[9px] uppercase tracking-wider text-slate-600 font-bold">Complete</div>
                         <div className="font-heading text-2xl font-bold text-emerald-700">{r.sold}</div>
                       </div>
                       <div className="rounded-md bg-white/70 p-2.5 backdrop-blur">
@@ -236,7 +236,7 @@ export default function Leaderboard() {
                   {/* Stats */}
                   <div className="w-16 text-center shrink-0">
                     <div className="font-heading text-xl font-bold text-emerald-600" data-testid={`lb-sold-${r.agent_id}`}>{r.sold}</div>
-                    <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Sold</div>
+                    <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Complete</div>
                   </div>
                   <div className="w-16 text-center shrink-0">
                     <div className="font-heading text-xl font-bold text-purple-600">{r.appointments}</div>

@@ -5,13 +5,14 @@ import { api } from "@/lib/api";
 import {
   LayoutDashboard, Users, Upload, UserCog, Shuffle, Copy,
   Trophy, BarChart3, Settings, LogOut, Search, Bell, Briefcase,
-  ChevronDown
+  ChevronDown, BookOpen, Sparkles, Clock
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
   DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel
 } from "@/components/ui/dropdown-menu";
+import { toast } from "sonner";
 
 const ownerNav = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
@@ -20,6 +21,7 @@ const ownerNav = [
   { to: "/agents", icon: UserCog, label: "Agents" },
   { to: "/assign", icon: Shuffle, label: "Assign Leads" },
   { to: "/duplicates", icon: Copy, label: "Duplicates" },
+  { to: "/book-of-business", icon: BookOpen, label: "Book of Business" },
   { to: "/leaderboard", icon: Trophy, label: "Leaderboard" },
   { to: "/reports", icon: BarChart3, label: "Reports" },
   { to: "/settings", icon: Settings, label: "Settings" },
@@ -28,7 +30,9 @@ const ownerNav = [
 const agentNav = [
   { to: "/my-leads", icon: Users, label: "My Leads" },
   { to: "/dashboard", icon: LayoutDashboard, label: "My Dashboard" },
+  { to: "/book-of-business", icon: BookOpen, label: "Book of Business" },
   { to: "/leaderboard", icon: Trophy, label: "Leaderboard" },
+  { to: "/resources", icon: Sparkles, label: "Resources" },
   { to: "/settings", icon: Settings, label: "Settings" },
 ];
 
@@ -36,9 +40,42 @@ export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
+  const [upcoming, setUpcoming] = useState([]);
+  const alertedRef = useRef(new Set());
   const lastActivityRef = useRef(Date.now());
   const nav = user?.role === "owner" ? ownerNav : agentNav;
   const leadsPath = user?.role === "owner" ? "/leads" : "/my-leads";
+
+  // Poll upcoming appointments every 30s; alert 5 minutes before start
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const { data } = await api.get("/appointments/upcoming");
+        if (cancelled) return;
+        setUpcoming(data);
+        const now = Date.now();
+        for (const lead of data) {
+          if (!lead.appointment_at) continue;
+          const t = new Date(lead.appointment_at).getTime();
+          const minutesUntil = (t - now) / 60000;
+          if (minutesUntil > 4 && minutesUntil <= 5 && !alertedRef.current.has(lead.id)) {
+            alertedRef.current.add(lead.id);
+            toast.warning(`Appointment in 5 minutes: ${lead.full_name}`, {
+              description: new Date(lead.appointment_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              action: { label: "Open lead", onClick: () => navigate(`/leads/${lead.id}`) },
+              duration: 12000,
+            });
+          }
+        }
+      } catch {}
+    };
+    poll();
+    const iv = setInterval(poll, 30000);
+    return () => { cancelled = true; clearInterval(iv); };
+    // eslint-disable-next-line
+  }, [user?.id]);
 
   // Activity tracking: send heartbeat on user activity; auto sign out after 30 min idle
   useEffect(() => {
@@ -156,9 +193,38 @@ export default function Layout() {
             />
           </div>
           <div className="flex items-center gap-3">
-            <button className="relative w-9 h-9 rounded-md hover:bg-slate-100 flex items-center justify-center text-slate-600">
-              <Bell size={16} />
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  data-testid="appointment-bell"
+                  className="relative w-9 h-9 rounded-md hover:bg-slate-100 flex items-center justify-center text-slate-600"
+                >
+                  <Bell size={16} />
+                  {upcoming.length > 0 && (
+                    <span className="absolute top-1.5 right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {upcoming.length}
+                    </span>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuLabel className="text-xs flex items-center gap-2">
+                  <Clock size={13}/> Upcoming appointments (30 min)
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {upcoming.length === 0 && (
+                  <div className="px-3 py-4 text-xs text-slate-500 text-center">No upcoming appointments</div>
+                )}
+                {upcoming.map((l) => (
+                  <DropdownMenuItem key={l.id} onClick={() => navigate(`/leads/${l.id}`)} className="flex-col items-start">
+                    <div className="text-sm font-medium text-slate-900">{l.full_name}</div>
+                    <div className="text-xs text-slate-500">
+                      {new Date(l.appointment_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button

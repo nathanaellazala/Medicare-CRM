@@ -13,7 +13,7 @@ import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import StatusBadge from "@/components/StatusBadge";
-import { ArrowLeft, Phone, Copy, Plus, PhoneCall, Pin, ClipboardEdit, History, FileText, User } from "lucide-react";
+import { ArrowLeft, Phone, Copy, Plus, PhoneCall, Pin, ClipboardEdit, History, FileText, User, Calendar, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 function Field({ label, value, copyable }) {
@@ -50,6 +50,8 @@ export default function LeadDetail() {
   const [newNote, setNewNote] = useState("");
   const [openCall, setOpenCall] = useState(false);
   const [callForm, setCallForm] = useState({ call_result: "", notes: "", follow_up_date: "", duration: "" });
+  const [openAppt, setOpenAppt] = useState(false);
+  const [apptForm, setApptForm] = useState({ date: "", time: "" });
 
   const isOwner = user?.role === "owner";
 
@@ -83,11 +85,47 @@ export default function LeadDetail() {
   if (!lead) return <div className="p-8 text-sm text-slate-500">Loading...</div>;
 
   const updateField = async (field, value) => {
+    // Special-case Appointment Set: prompt for date/time
+    if (field === "lead_status" && value === "Appointment Set") {
+      // Prefill with existing appointment if present, otherwise +1 day at 10:00
+      const existing = lead?.appointment_at ? new Date(lead.appointment_at) : null;
+      const base = existing || (() => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0); return d; })();
+      setApptForm({
+        date: base.toISOString().slice(0, 10),
+        time: base.toTimeString().slice(0, 5),
+      });
+      setOpenAppt(true);
+      return;
+    }
     try {
       const { data } = await api.patch(`/leads/${id}`, { [field]: value });
       setLead(data);
       load();
       toast.success("Updated");
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const saveAppointment = async () => {
+    if (!apptForm.date || !apptForm.time) { toast.error("Pick date and time"); return; }
+    const iso = new Date(`${apptForm.date}T${apptForm.time}`).toISOString();
+    try {
+      const { data } = await api.patch(`/leads/${id}`, {
+        lead_status: "Appointment Set",
+        appointment_at: iso,
+      });
+      setLead(data);
+      setOpenAppt(false);
+      load();
+      toast.success(`Appointment set for ${new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`);
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const deleteLead = async () => {
+    if (!window.confirm("Delete this lead? This cannot be undone.")) return;
+    try {
+      await api.delete(`/leads/${id}`);
+      toast.success("Lead deleted");
+      navigate(-1);
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
@@ -141,8 +179,14 @@ export default function LeadDetail() {
               <h1 className="font-heading text-2xl font-semibold text-slate-900" data-testid="lead-name">
                 {lead.full_name}
               </h1>
-              <div className="flex items-center gap-3 mt-1.5">
+              <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                 <StatusBadge status={lead.lead_status} />
+                {lead.appointment_at && lead.lead_status === "Appointment Set" && (
+                  <span className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-800 border border-purple-200 font-medium" data-testid="appt-badge">
+                    <Calendar size={11}/>
+                    {new Date(lead.appointment_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                )}
                 {lead.is_duplicate && (
                   <span className="text-xs px-2 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
                     Possible duplicate
@@ -215,9 +259,38 @@ export default function LeadDetail() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+            {isOwner && (
+              <Button onClick={deleteLead} className="h-9 bg-white border border-red-200 text-red-600 hover:bg-red-50" data-testid="lead-delete">
+                <Trash2 size={14}/>
+              </Button>
+            )}
           </div>
         </div>
       </Card>
+
+      {/* Appointment date/time dialog */}
+      <Dialog open={openAppt} onOpenChange={setOpenAppt}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Schedule appointment</DialogTitle></DialogHeader>
+          <p className="text-xs text-slate-500 -mt-2">You'll get a reminder 5 minutes before the appointment starts.</p>
+          <div className="grid grid-cols-2 gap-3 mt-2">
+            <div>
+              <Label className="text-xs">Date</Label>
+              <Input type="date" value={apptForm.date} onChange={(e) => setApptForm({ ...apptForm, date: e.target.value })} className="mt-1.5" data-testid="appt-date"/>
+            </div>
+            <div>
+              <Label className="text-xs">Time</Label>
+              <Input type="time" value={apptForm.time} onChange={(e) => setApptForm({ ...apptForm, time: e.target.value })} className="mt-1.5" data-testid="appt-time"/>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setOpenAppt(false)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</Button>
+            <Button onClick={saveAppointment} className="text-white" style={{ background: "#026AA2" }} data-testid="appt-save">
+              <Calendar size={13} className="mr-1.5"/> Save appointment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Overview */}
