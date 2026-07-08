@@ -27,12 +27,63 @@ export default function Leads() {
   const [status, setStatus] = useState(params.get("status") || "");
   const [agentFilter, setAgentFilter] = useState(params.get("agent_id") || "");
   const [leadType, setLeadType] = useState(params.get("lead_type") || "");
-  const [sort, setSort] = useState("updated_desc");
+  const [sort, setSort] = useState(params.get("sort") || "updated_desc");
+  const [sortCol, setSortCol] = useState(params.get("sortCol") || "");
+  const [sortDir, setSortDir] = useState(params.get("sortDir") || "");
   const [statuses, setStatuses] = useState([]);
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState({});
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkAgent, setBulkAgent] = useState("");
+  const [openAdd, setOpenAdd] = useState(false);
+  const [addForm, setAddForm] = useState({ first_name: "", last_name: "", phone_number: "", other_phone_number: "", birthdate: "", city: "", state: "", county: "", lead_type: "New to Medicare" });
+
+  // Persist filters to URL so navigating back keeps the same view
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (q) next.set("q", q);
+    if (status) next.set("status", status);
+    if (agentFilter) next.set("agent_id", agentFilter);
+    if (leadType) next.set("lead_type", leadType);
+    if (sort && sort !== "updated_desc") next.set("sort", sort);
+    if (sortCol) { next.set("sortCol", sortCol); next.set("sortDir", sortDir); }
+    setParams(next, { replace: true });
+    // eslint-disable-next-line
+  }, [q, status, agentFilter, leadType, sort, sortCol, sortDir]);
+
+  const toggleSort = (col) => {
+    if (sortCol !== col) { setSortCol(col); setSortDir("asc"); return; }
+    if (sortDir === "asc") { setSortDir("desc"); return; }
+    setSortCol(""); setSortDir("");
+  };
+  const sortSuffix = (col) => {
+    if (sortCol !== col) return "";
+    return sortDir === "asc" ? " ↑" : sortDir === "desc" ? " ↓" : "";
+  };
+
+  const sortedItems = useMemo(() => {
+    if (!sortCol) return items;
+    const arr = [...items];
+    arr.sort((a, b) => {
+      const va = (a[sortCol] ?? "").toString().toLowerCase();
+      const vb = (b[sortCol] ?? "").toString().toLowerCase();
+      if (va < vb) return sortDir === "asc" ? -1 : 1;
+      if (va > vb) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+    return arr;
+  }, [items, sortCol, sortDir]);
+
+  const createLead = async () => {
+    if (!addForm.first_name && !addForm.last_name) { toast.error("Enter a name"); return; }
+    try {
+      await api.post("/leads", addForm);
+      toast.success("Lead added");
+      setOpenAdd(false);
+      setAddForm({ first_name: "", last_name: "", phone_number: "", other_phone_number: "", birthdate: "", city: "", state: "", county: "", lead_type: "New to Medicare" });
+      load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
 
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
 
@@ -145,6 +196,9 @@ export default function Leads() {
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          <Button onClick={() => setOpenAdd(true)} className="h-9 text-white" style={{ background: "#026AA2" }} data-testid="add-lead-button">
+            + Add lead
+          </Button>
           <Button onClick={load} className="h-9 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" data-testid="leads-refresh">
             <RefreshCw size={14} className="mr-1.5" /> Refresh
           </Button>
@@ -268,30 +322,27 @@ export default function Leads() {
                   <Checkbox onCheckedChange={toggleAll} data-testid="select-all"
                             checked={items.length > 0 && selectedIds.length === items.length}/>
                 </th>}
-                <th className="px-4 py-3">Name</th>
+                <th onClick={() => toggleSort("full_name")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Name{sortSuffix("full_name")}</th>
                 <th className="px-4 py-3">Phone</th>
-                <th className="px-4 py-3">Birthdate</th>
-                <th className="px-4 py-3">County</th>
+                <th onClick={() => toggleSort("birthdate")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Birthdate{sortSuffix("birthdate")}</th>
+                <th onClick={() => toggleSort("county")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">County{sortSuffix("county")}</th>
                 <th className="px-4 py-3">City / State</th>
-                <th className="px-4 py-3">Medicare #</th>
-                <th className="px-4 py-3">Medicaid #</th>
                 <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Status</th>
+                <th onClick={() => toggleSort("lead_status")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Status{sortSuffix("lead_status")}</th>
                 {isOwner && <th className="px-4 py-3">Agent</th>}
-                <th className="px-4 py-3">Provider</th>
-                <th className="px-4 py-3">Parts</th>
-                <th className="px-4 py-3">Updated</th>
+                <th onClick={() => toggleSort("medicaid_provider")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Provider{sortSuffix("medicaid_provider")}</th>
+                <th onClick={() => toggleSort("updated_at")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Updated{sortSuffix("updated_at")}</th>
                 <th className="px-4 py-3 w-10"></th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={isOwner ? 15 : 13} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
+                <tr><td colSpan={isOwner ? 11 : 10} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
               )}
-              {!loading && items.length === 0 && (
-                <tr><td colSpan={isOwner ? 15 : 13} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
+              {!loading && sortedItems.length === 0 && (
+                <tr><td colSpan={isOwner ? 11 : 10} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
               )}
-              {!loading && items.map((lead) => (
+              {!loading && sortedItems.map((lead) => (
                 <tr key={lead.id} className="cursor-pointer" data-testid={`lead-row-${lead.id}`}
                     onClick={() => navigate(`/leads/${lead.id}`)}>
                   {isOwner && (
@@ -312,8 +363,6 @@ export default function Leads() {
                   <td className="px-4 py-3 text-sm text-slate-700">
                     {lead.city ? `${lead.city}, ${lead.state}` : "—"}
                   </td>
-                  <td className="px-4 py-3 text-sm text-slate-700 font-mono text-xs">{lead.medicare_number || "—"}</td>
-                  <td className="px-4 py-3 text-sm text-slate-700 font-mono text-xs">{lead.medicaid_number || "—"}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs font-medium px-2 py-0.5 rounded border ${
                       lead.lead_type === "Transfer"
@@ -335,7 +384,6 @@ export default function Leads() {
                   </td>
                   {isOwner && <td className="px-4 py-3 text-sm text-slate-700">{agentName(lead.assigned_agent_id)}</td>}
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.medicaid_provider || "—"}</td>
-                  <td className="px-4 py-3 text-sm text-slate-700">{lead.medicare_parts || "—"}</td>
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {lead.updated_at ? new Date(lead.updated_at).toLocaleDateString() : "—"}
                   </td>
@@ -359,6 +407,60 @@ export default function Leads() {
           </table>
         </div>
       </div>
+      {/* Add Lead Dialog */}
+      <Dialog open={openAdd} onOpenChange={setOpenAdd}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Add new lead</DialogTitle></DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-medium text-slate-700">First name</label>
+              <Input value={addForm.first_name} onChange={(e) => setAddForm({ ...addForm, first_name: e.target.value })} className="mt-1.5" data-testid="add-first-name"/>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">Last name</label>
+              <Input value={addForm.last_name} onChange={(e) => setAddForm({ ...addForm, last_name: e.target.value })} className="mt-1.5" data-testid="add-last-name"/>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">Phone</label>
+              <Input value={addForm.phone_number} onChange={(e) => setAddForm({ ...addForm, phone_number: e.target.value })} className="mt-1.5" data-testid="add-phone"/>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">Other phone</label>
+              <Input value={addForm.other_phone_number} onChange={(e) => setAddForm({ ...addForm, other_phone_number: e.target.value })} className="mt-1.5"/>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">Birthdate</label>
+              <Input type="date" value={addForm.birthdate} onChange={(e) => setAddForm({ ...addForm, birthdate: e.target.value })} className="mt-1.5"/>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">County</label>
+              <Input value={addForm.county} onChange={(e) => setAddForm({ ...addForm, county: e.target.value })} className="mt-1.5"/>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">City</label>
+              <Input value={addForm.city} onChange={(e) => setAddForm({ ...addForm, city: e.target.value })} className="mt-1.5"/>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">State</label>
+              <Input value={addForm.state} onChange={(e) => setAddForm({ ...addForm, state: e.target.value.toUpperCase().slice(0, 2) })} className="mt-1.5"/>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-medium text-slate-700">Lead type</label>
+              <Select value={addForm.lead_type} onValueChange={(v) => setAddForm({ ...addForm, lead_type: v })}>
+                <SelectTrigger className="mt-1.5 h-9"><SelectValue/></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="New to Medicare">New to Medicare</SelectItem>
+                  <SelectItem value="Transfer">Transfer</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button onClick={() => setOpenAdd(false)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</Button>
+            <Button onClick={createLead} className="text-white" style={{ background: "#026AA2" }} data-testid="add-lead-save">Add lead</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

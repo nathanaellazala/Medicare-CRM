@@ -161,7 +161,7 @@ export default function Layout() {
             </div>
             <div>
               <div className="font-heading font-semibold text-sm text-slate-900 leading-tight">
-                Health Experts
+                HN
               </div>
               <div className="text-[10px] text-slate-500 tracking-wider uppercase">CRM</div>
             </div>

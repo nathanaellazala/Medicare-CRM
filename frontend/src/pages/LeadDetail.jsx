@@ -13,6 +13,7 @@ import {
   Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import StatusBadge from "@/components/StatusBadge";
+import ApplicationInfo from "@/pages/ApplicationInfo";
 import { ArrowLeft, Phone, Copy, Plus, PhoneCall, Pin, ClipboardEdit, History, FileText, User, Calendar, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -303,6 +304,7 @@ export default function LeadDetail() {
             <Field label="Last Name" value={lead.last_name}/>
             <Field label="Birthdate" value={lead.birthdate}/>
             <Field label="Phone" value={lead.phone_number} copyable/>
+            <Field label="Other Phone" value={lead.other_phone_number} copyable/>
             <Field label="Address" value={lead.address}/>
             <Field label="City / State" value={lead.city ? `${lead.city}, ${lead.state}` : ""}/>
             <Field label="Zip" value={lead.zip_code}/>
@@ -331,6 +333,9 @@ export default function LeadDetail() {
               </TabsTrigger>
               <TabsTrigger value="calls" data-testid="tab-calls" className="data-[state=active]:border-b-2 data-[state=active]:border-[#026AA2] data-[state=active]:text-[#026AA2] rounded-none h-11 px-5">
                 <PhoneCall size={14} className="mr-1.5"/> Calls ({calls.length})
+              </TabsTrigger>
+              <TabsTrigger value="application" data-testid="tab-application" className="data-[state=active]:border-b-2 data-[state=active]:border-[#026AA2] data-[state=active]:text-[#026AA2] rounded-none h-11 px-5">
+                <ClipboardEdit size={14} className="mr-1.5"/> Application Info
               </TabsTrigger>
             </TabsList>
 
@@ -415,6 +420,10 @@ export default function LeadDetail() {
                   </div>
                 ))}
               </div>
+            </TabsContent>
+
+            <TabsContent value="application" className="p-5 m-0">
+              <ApplicationInfo lead={lead} onSaved={load}/>
             </TabsContent>
           </Tabs>
         </Card>

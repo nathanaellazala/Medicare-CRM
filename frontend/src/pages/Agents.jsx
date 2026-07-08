@@ -24,7 +24,16 @@ export default function Agents() {
 
   const load = async () => {
     const { data } = await api.get("/users");
-    setAgents(data);
+    // Enrich each user with today/week activity minutes
+    const enriched = await Promise.all(data.map(async (u) => {
+      try {
+        const { data: act } = await api.get(`/users/${u.id}/activity`);
+        return { ...u, today_minutes: act.today_minutes, week_minutes: act.week_minutes };
+      } catch {
+        return { ...u, today_minutes: 0, week_minutes: 0 };
+      }
+    }));
+    setAgents(enriched);
   };
   useEffect(() => {
     load();
@@ -139,6 +148,7 @@ export default function Agents() {
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Email</th>
               <th className="px-4 py-3">Activity</th>
+              <th className="px-4 py-3">Time (Today / Week)</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Leaderboard</th>
               <th className="px-4 py-3">Last login</th>
@@ -171,6 +181,16 @@ export default function Agents() {
                     <Circle size={8} className="fill-current"/>
                     {actLabel}
                   </span>
+                </td>
+                <td className="px-4 py-3 text-xs">
+                  <div className="flex flex-col gap-0.5" data-testid={`time-${a.id}`}>
+                    <span className="text-slate-800 font-medium">
+                      {Math.floor((a.today_minutes || 0) / 60)}h {(a.today_minutes || 0) % 60}m <span className="text-slate-400 font-normal">today</span>
+                    </span>
+                    <span className="text-slate-600">
+                      {Math.floor((a.week_minutes || 0) / 60)}h {(a.week_minutes || 0) % 60}m <span className="text-slate-400">this week</span>
+                    </span>
+                  </div>
                 </td>
                 <td className="px-4 py-3">
                   <span className={`text-xs px-2 py-0.5 rounded-full border ${

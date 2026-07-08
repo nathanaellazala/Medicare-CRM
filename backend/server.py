@@ -275,6 +275,7 @@ class LeadIn(BaseModel):
     zip_code: Optional[str] = ""
     county: Optional[str] = ""
     phone_number: Optional[str] = ""
+    other_phone_number: Optional[str] = ""
     medicaid_number: Optional[str] = ""
     medicare_number: Optional[str] = ""
     medicaid_provider: Optional[str] = ""
@@ -283,6 +284,8 @@ class LeadIn(BaseModel):
     lead_status: Optional[str] = "Uncalled"
     appointment_at: Optional[str] = None
     assigned_agent_id: Optional[str] = None
+    application_info: Optional[Dict[str, Any]] = None
+    hra_info: Optional[Dict[str, Any]] = None
 
 class LeadUpdateIn(BaseModel):
     first_name: Optional[str] = None
@@ -294,6 +297,7 @@ class LeadUpdateIn(BaseModel):
     zip_code: Optional[str] = None
     county: Optional[str] = None
     phone_number: Optional[str] = None
+    other_phone_number: Optional[str] = None
     medicaid_number: Optional[str] = None
     medicare_number: Optional[str] = None
     medicaid_provider: Optional[str] = None
@@ -302,6 +306,8 @@ class LeadUpdateIn(BaseModel):
     lead_status: Optional[str] = None
     appointment_at: Optional[str] = None
     assigned_agent_id: Optional[str] = None
+    application_info: Optional[Dict[str, Any]] = None
+    hra_info: Optional[Dict[str, Any]] = None
 
 class NoteIn(BaseModel):
     note_text: str
@@ -418,8 +424,30 @@ async def list_users(user: dict = Depends(get_current_user)):
 
 @api.post("/users/me/heartbeat")
 async def heartbeat(user: dict = Depends(get_current_user)):
-    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_activity_at": now_iso()}})
+    ts = now_iso()
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_activity_at": ts}})
+    # Insert a ping row for time-worked calculations
+    await db.activity_pings.insert_one({"_id": str(uuid.uuid4()), "user_id": user["_id"], "ts": ts})
     return {"ok": True}
+
+def _week_start_iso() -> str:
+    now = datetime.now(timezone.utc)
+    day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=now.weekday())
+    return day.isoformat()
+
+def _today_start_iso() -> str:
+    now = datetime.now(timezone.utc)
+    return datetime(now.year, now.month, now.day, tzinfo=timezone.utc).isoformat()
+
+@api.get("/users/{user_id}/activity")
+async def user_activity(user_id: str, user: dict = Depends(get_current_user)):
+    """Return today + week active-time in minutes. Owner sees any user; agents only themselves."""
+    if user["role"] != "owner" and user["_id"] != user_id:
+        raise HTTPException(403, "Forbidden")
+    today_count = await db.activity_pings.count_documents({"user_id": user_id, "ts": {"$gte": _today_start_iso()}})
+    week_count = await db.activity_pings.count_documents({"user_id": user_id, "ts": {"$gte": _week_start_iso()}})
+    # each heartbeat represents ~1 minute of activity
+    return {"today_minutes": today_count, "week_minutes": week_count}
 
 @api.post("/users")
 async def create_user(body: UserCreateIn, user: dict = Depends(require_owner)):
@@ -570,12 +598,16 @@ async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
     return mask_lead_for_user(clean_doc(lead), user)
 
 @api.post("/leads")
-async def create_lead(body: LeadIn, user: dict = Depends(require_owner)):
+async def create_lead(body: LeadIn, user: dict = Depends(get_current_user)):
     lid = str(uuid.uuid4())
     full_name = f"{body.first_name or ''} {body.last_name or ''}".strip()
+    payload = body.model_dump()
+    # Agents can only create leads they own — auto-assign to themselves.
+    if user.get("role") != "owner":
+        payload["assigned_agent_id"] = user["_id"]
     doc = {
         "_id": lid,
-        **body.model_dump(),
+        **payload,
         "full_name": full_name,
         "normalized_phone_number": normalize_phone(body.phone_number),
         "source_import_batch_id": None,
@@ -1337,6 +1369,7 @@ async def startup():
     await db.call_logs.create_index("lead_id")
     await db.call_logs.create_index("user_id")
     await db.audit_logs.create_index("entity_id")
+    await db.activity_pings.create_index([("user_id", 1), ("ts", -1)])
 
     # Launch cleanup intentionally disabled — user opted to keep the existing
     # owner@healthexpertscrm.com account on production. Do NOT re-enable
@@ -1345,6 +1378,14 @@ async def startup():
     # Migration: rename "Sold" → "Complete" everywhere (idempotent)
     await db.lead_statuses.update_many({"name": "Sold"}, {"$set": {"name": "Complete"}})
     await db.leads.update_many({"lead_status": "Sold"}, {"$set": {"lead_status": "Complete"}})
+
+    # Migration: ensure "Pending Completion" status exists
+    if not await db.lead_statuses.find_one({"name": "Pending Completion"}):
+        await db.lead_statuses.insert_one({
+            "_id": str(uuid.uuid4()),
+            "name": "Pending Completion", "color": "teal", "sort_order": 12,
+            "is_active": True, "created_at": now_iso(), "updated_at": now_iso(),
+        })
 
     # Seed statuses
     if await db.lead_statuses.count_documents({}) == 0:

@@ -50,7 +50,7 @@ export default function Login() {
             The command center for your Medicare sales team.
           </h1>
           <p className="text-sky-100/90 text-base leading-relaxed mb-10">
-            Health Experts CRM helps agencies upload leads, assign to agents, log calls,
+            HN CRM helps agencies upload leads, assign to agents, log calls,
             and track performance — all in one professional workspace.
           </p>
           <div className="grid grid-cols-3 gap-4 pt-8 border-t border-white/15">
@@ -77,7 +77,7 @@ export default function Login() {
               <Briefcase size={18} />
             </div>
             <div>
-              <div className="font-heading font-semibold text-slate-900">Health Experts</div>
+              <div className="font-heading font-semibold text-slate-900">HN</div>
               <div className="text-[10px] uppercase tracking-wider text-slate-500">CRM</div>
             </div>
           </div>
