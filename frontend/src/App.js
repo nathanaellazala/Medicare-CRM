@@ -18,6 +18,7 @@ import Settings from "@/pages/Settings";
 import Reports from "@/pages/Reports";
 import Resources from "@/pages/Resources";
 import BookOfBusiness from "@/pages/BookOfBusiness";
+import Appointments from "@/pages/Appointments";
 import { Toaster } from "sonner";
 
 function DashboardSwitch() {
@@ -51,6 +52,7 @@ function App() {
             <Route path="/duplicates" element={<ProtectedRoute ownerOnly><Duplicates /></ProtectedRoute>} />
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/book-of-business" element={<BookOfBusiness />} />
+            <Route path="/appointments" element={<Appointments />} />
             <Route path="/resources" element={<Resources />} />
             <Route path="/reports" element={<ProtectedRoute ownerOnly><Reports /></ProtectedRoute>} />
             <Route path="/settings" element={<Settings />} />

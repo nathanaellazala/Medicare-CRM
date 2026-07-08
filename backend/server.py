@@ -688,6 +688,49 @@ async def upcoming_appointments(user: dict = Depends(get_current_user)):
     items = await db.leads.find(f).sort("appointment_at", 1).to_list(50)
     return [clean_doc(d) for d in items]
 
+@api.get("/appointments")
+async def list_appointments(
+    user: dict = Depends(get_current_user),
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+):
+    """All appointments scoped by role. Optionally filtered by from_date..to_date (ISO date)."""
+    f = {
+        "appointment_at": {"$ne": None, "$exists": True},
+        "lead_status": "Appointment Set",
+        **lead_scope_filter(user),
+    }
+    if from_date:
+        f["appointment_at"]["$gte"] = from_date
+    if to_date:
+        f["appointment_at"]["$lte"] = to_date + "T23:59:59"
+    items = await db.leads.find(f).sort("appointment_at", 1).to_list(1000)
+    # Enrich with agent name
+    agent_ids = list({l.get("assigned_agent_id") for l in items if l.get("assigned_agent_id")})
+    agent_map = {}
+    if agent_ids:
+        for u in await db.users.find({"_id": {"$in": agent_ids}}).to_list(len(agent_ids)):
+            agent_map[u["_id"]] = f"{u['first_name']} {u['last_name']}"
+    result = []
+    for l in items:
+        d = clean_doc(l)
+        d["agent_name"] = agent_map.get(d.get("assigned_agent_id"), "Unassigned")
+        result.append(mask_lead_for_user(d, user))
+    return result
+
+@api.post("/appointments/{lead_id}/cancel")
+async def cancel_appointment(lead_id: str, user: dict = Depends(get_current_user)):
+    """Clear appointment_at and revert status. Owner can cancel any; agents only their own."""
+    lead = await db.leads.find_one({"_id": lead_id, **lead_scope_filter(user)})
+    if not lead:
+        raise HTTPException(404, "Appointment not found")
+    await db.leads.update_one(
+        {"_id": lead_id},
+        {"$set": {"appointment_at": None, "lead_status": "Call Back Later", "updated_at": now_iso()}},
+    )
+    await add_audit(user["_id"], "appointment_cancelled", "lead", lead_id, lead.get("appointment_at"), None)
+    return {"ok": True}
+
 @api.get("/leads/export/csv")
 async def export_csv(
     user: dict = Depends(require_owner),

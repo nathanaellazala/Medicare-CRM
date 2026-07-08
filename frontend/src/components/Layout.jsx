@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import {
   LayoutDashboard, Users, Upload, UserCog, Shuffle, Copy,
   Trophy, BarChart3, Settings, LogOut, Search, Bell, Briefcase,
-  ChevronDown, BookOpen, Sparkles, Clock
+  ChevronDown, BookOpen, Sparkles, Clock, Calendar as CalendarIcon
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,6 +20,7 @@ const ownerNav = [
   { to: "/import", icon: Upload, label: "Import Leads" },
   { to: "/agents", icon: UserCog, label: "Agents" },
   { to: "/assign", icon: Shuffle, label: "Assign Leads" },
+  { to: "/appointments", icon: CalendarIcon, label: "Appointments" },
   { to: "/duplicates", icon: Copy, label: "Duplicates" },
   { to: "/book-of-business", icon: BookOpen, label: "Book of Business" },
   { to: "/leaderboard", icon: Trophy, label: "Leaderboard" },
@@ -30,6 +31,7 @@ const ownerNav = [
 const agentNav = [
   { to: "/my-leads", icon: Users, label: "My Leads" },
   { to: "/dashboard", icon: LayoutDashboard, label: "My Dashboard" },
+  { to: "/appointments", icon: CalendarIcon, label: "Appointments" },
   { to: "/book-of-business", icon: BookOpen, label: "Book of Business" },
   { to: "/leaderboard", icon: Trophy, label: "Leaderboard" },
   { to: "/resources", icon: Sparkles, label: "Resources" },
@@ -49,6 +51,11 @@ export default function Layout() {
   // Poll upcoming appointments every 30s; alert 5 minutes before start
   useEffect(() => {
     if (!user) return;
+    // Ask the browser for notification permission once — enables true pop-ups
+    // that fire even when the CRM tab is not focused.
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
     let cancelled = false;
     const poll = async () => {
       try {
@@ -62,11 +69,24 @@ export default function Layout() {
           const minutesUntil = (t - now) / 60000;
           if (minutesUntil > 4 && minutesUntil <= 5 && !alertedRef.current.has(lead.id)) {
             alertedRef.current.add(lead.id);
+            const timeLabel = new Date(lead.appointment_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            // In-app toast
             toast.warning(`Appointment in 5 minutes: ${lead.full_name}`, {
-              description: new Date(lead.appointment_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              description: timeLabel,
               action: { label: "Open lead", onClick: () => navigate(`/leads/${lead.id}`) },
               duration: 12000,
             });
+            // Desktop pop-up (works even when tab is not focused)
+            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+              try {
+                const n = new Notification(`Appointment in 5 minutes: ${lead.full_name}`, {
+                  body: `${timeLabel}${lead.phone_number ? " · " + lead.phone_number : ""}`,
+                  tag: `appt-${lead.id}`,
+                  requireInteraction: true,
+                });
+                n.onclick = () => { window.focus(); navigate(`/leads/${lead.id}`); };
+              } catch {}
+            }
           }
         }
       } catch {}
