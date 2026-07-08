@@ -430,6 +430,24 @@ async def heartbeat(user: dict = Depends(get_current_user)):
     await db.activity_pings.insert_one({"_id": str(uuid.uuid4()), "user_id": user["_id"], "ts": ts})
     return {"ok": True}
 
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+@api.post("/users/me/change-password")
+async def change_own_password(body: ChangePasswordIn, user: dict = Depends(get_current_user)):
+    if len(body.new_password) < 8:
+        raise HTTPException(400, "New password must be at least 8 characters")
+    full = await db.users.find_one({"_id": user["_id"]})
+    if not full or not verify_password(body.current_password, full["password_hash"]):
+        raise HTTPException(400, "Current password is incorrect")
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"password_hash": hash_password(body.new_password), "updated_at": now_iso()}},
+    )
+    await add_audit(user["_id"], "password_changed", "user", user["_id"])
+    return {"ok": True}
+
 def _week_start_iso() -> str:
     now = datetime.now(timezone.utc)
     day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=now.weekday())

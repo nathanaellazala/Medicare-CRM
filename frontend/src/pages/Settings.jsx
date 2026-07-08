@@ -123,6 +123,58 @@ export default function Settings() {
         )}
 
         <TabsContent value="profile">
+          <Card className="p-6 border-slate-200 rounded-md shadow-sm mb-5">
+            <h2 className="font-heading text-base font-semibold text-slate-900 mb-4">My profile</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-xs">Name</Label>
+                <Input value={`${user?.first_name} ${user?.last_name}`} disabled className="mt-1.5"/>
+              </div>
+              <div>
+                <Label className="text-xs">Email</Label>
+                <Input value={user?.email || ""} disabled className="mt-1.5"/>
+              </div>
+              <div>
+                <Label className="text-xs">Role</Label>
+                <Input value={user?.role || ""} disabled className="mt-1.5 capitalize"/>
+              </div>
+              <div>
+                <Label className="text-xs">Status</Label>
+                <Input value={user?.status || ""} disabled className="mt-1.5"/>
+              </div>
+            </div>
+          </Card>
+
+          <ChangePasswordCard/>
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+        {isOwner && (
+          <TabsContent value="statuses">
+            <Card className="p-6 border-slate-200 rounded-md shadow-sm">
+              <h2 className="font-heading text-base font-semibold text-slate-900 mb-1">Lead statuses</h2>
+              <p className="text-xs text-slate-500 mb-4">Add or remove statuses agents can apply to leads.</p>
+              <div className="flex flex-wrap gap-2 mb-5">
+                {statuses.map((s) => (
+                  <div key={s.id} className="flex items-center gap-2 border border-slate-200 rounded-md px-2 py-1.5 bg-white">
+                    <StatusBadge status={s.name}/>
+                    <button onClick={() => removeStatus(s.id)} className="text-slate-400 hover:text-red-600 text-xs ml-1" data-testid={`del-status-${s.id}`}>×</button>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2 max-w-md">
+                <Input placeholder="New status name" value={newStatus.name} onChange={(e) => setNewStatus({ ...newStatus, name: e.target.value })} data-testid="new-status-name"/>
+                <Button onClick={addStatus} className="text-white shrink-0" style={{ background: "#026AA2" }} data-testid="add-status">
+                  <Plus size={14} className="mr-1.5"/> Add
+                </Button>
+              </div>
+            </Card>
+          </TabsContent>
+        )}
+
+        <TabsContent value="profile">
           <Card className="p-6 border-slate-200 rounded-md shadow-sm">
             <h2 className="font-heading text-base font-semibold text-slate-900 mb-4">My profile</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
