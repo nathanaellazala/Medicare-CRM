@@ -674,14 +674,24 @@ async def delete_lead(lead_id: str, user: dict = Depends(require_owner)):
     await add_audit(user["_id"], "lead_deleted", "lead", lead_id)
     return {"ok": True}
 
+from pymongo import UpdateOne
+
+def _audit_docs(user_id: str, action: str, lead_ids: List[str], new_value: Any = None) -> List[dict]:
+    ts = now_iso()
+    return [{
+        "_id": str(uuid.uuid4()), "user_id": user_id,
+        "action_type": action, "entity_type": "lead", "entity_id": lid,
+        "old_value": None, "new_value": new_value, "created_at": ts,
+    } for lid in lead_ids]
+
 @api.post("/leads/bulk-status")
 async def bulk_status(body: BulkStatusIn, user: dict = Depends(require_owner)):
     res = await db.leads.update_many(
         {"_id": {"$in": body.lead_ids}},
         {"$set": {"lead_status": body.lead_status, "updated_at": now_iso()}},
     )
-    for lid in body.lead_ids:
-        await add_audit(user["_id"], "status_changed", "lead", lid, None, body.lead_status)
+    if body.lead_ids:
+        await db.audit_logs.insert_many(_audit_docs(user["_id"], "status_changed", body.lead_ids, body.lead_status))
     return {"modified": res.modified_count}
 
 @api.post("/leads/assign")
@@ -690,8 +700,8 @@ async def assign_leads(body: AssignIn, user: dict = Depends(require_owner)):
         {"_id": {"$in": body.lead_ids}},
         {"$set": {"assigned_agent_id": body.agent_id, "updated_at": now_iso()}},
     )
-    for lid in body.lead_ids:
-        await add_audit(user["_id"], "lead_assigned", "lead", lid, None, body.agent_id)
+    if body.lead_ids:
+        await db.audit_logs.insert_many(_audit_docs(user["_id"], "lead_assigned", body.lead_ids, body.agent_id))
     return {"modified": res.modified_count}
 
 @api.post("/leads/round-robin")
@@ -703,15 +713,22 @@ async def round_robin(body: RoundRobinIn, user: dict = Depends(require_owner)):
     else:
         unassigned = await db.leads.find({"assigned_agent_id": None}, {"_id": 1}).to_list(10000)
         lead_ids = [d["_id"] for d in unassigned]
-    count = 0
+    if not lead_ids:
+        return {"assigned": 0, "agents": len(body.agent_ids)}
+    ts = now_iso()
+    updates = []
+    audits = []
     for i, lid in enumerate(lead_ids):
         agent = body.agent_ids[i % len(body.agent_ids)]
-        await db.leads.update_one(
-            {"_id": lid}, {"$set": {"assigned_agent_id": agent, "updated_at": now_iso()}}
-        )
-        await add_audit(user["_id"], "lead_assigned", "lead", lid, None, agent)
-        count += 1
-    return {"assigned": count, "agents": len(body.agent_ids)}
+        updates.append(UpdateOne({"_id": lid}, {"$set": {"assigned_agent_id": agent, "updated_at": ts}}))
+        audits.append({
+            "_id": str(uuid.uuid4()), "user_id": user["_id"],
+            "action_type": "lead_assigned", "entity_type": "lead", "entity_id": lid,
+            "old_value": None, "new_value": agent, "created_at": ts,
+        })
+    await db.leads.bulk_write(updates, ordered=False)
+    await db.audit_logs.insert_many(audits)
+    return {"assigned": len(lead_ids), "agents": len(body.agent_ids)}
 
 @api.post("/leads/bulk-delete")
 async def bulk_delete_leads(body: dict, user: dict = Depends(require_owner)):
@@ -721,8 +738,7 @@ async def bulk_delete_leads(body: dict, user: dict = Depends(require_owner)):
     res = await db.leads.delete_many({"_id": {"$in": ids}})
     await db.notes.delete_many({"lead_id": {"$in": ids}})
     await db.call_logs.delete_many({"lead_id": {"$in": ids}})
-    for lid in ids:
-        await add_audit(user["_id"], "lead_deleted", "lead", lid)
+    await db.audit_logs.insert_many(_audit_docs(user["_id"], "lead_deleted", ids))
     return {"deleted": res.deleted_count}
 
 @api.get("/appointments/upcoming")
@@ -1061,10 +1077,13 @@ async def import_commit(body: ImportCommitIn, user: dict = Depends(require_owner
     # assignment
     auto_assigned = 0
     if body.assignment_method == "round_robin" and body.agent_ids and new_lead_ids:
-        for i, lid in enumerate(new_lead_ids):
-            agent = body.agent_ids[i % len(body.agent_ids)]
-            await db.leads.update_one({"_id": lid}, {"$set": {"assigned_agent_id": agent, "updated_at": now_iso()}})
-            auto_assigned += 1
+        ts = now_iso()
+        updates = [
+            UpdateOne({"_id": lid}, {"$set": {"assigned_agent_id": body.agent_ids[i % len(body.agent_ids)], "updated_at": ts}})
+            for i, lid in enumerate(new_lead_ids)
+        ]
+        await db.leads.bulk_write(updates, ordered=False)
+        auto_assigned = len(new_lead_ids)
 
     batch_doc = {
         "_id": batch_id,

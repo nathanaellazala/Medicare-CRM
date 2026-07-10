@@ -18,7 +18,7 @@ async def seed_demo_data(db, hash_password):
         "_id": str(uuid.uuid4()),
         "first_name": "Henry",
         "last_name": "Owner",
-        "email": "henry@healthexpertscrm.com",
+        "email": "owner@healthexpertscrm.com",
         "password_hash": hash_password("Password123!"),
         "role": "owner",
         "status": "active",
