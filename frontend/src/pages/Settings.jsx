@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
+import { useTheme } from "@/context/ThemeContext";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,21 +9,29 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import StatusBadge from "@/components/StatusBadge";
 import { toast } from "sonner";
-import { Plus, Save } from "lucide-react";
+import { Plus, Save, Sun, Moon, KeyRound, Palette } from "lucide-react";
 
 export default function Settings() {
   const { user } = useAuth();
   const isOwner = user?.role === "owner";
+  const { theme, setTheme } = useTheme();
   const [company, setCompany] = useState({});
   const [statuses, setStatuses] = useState([]);
   const [newStatus, setNewStatus] = useState({ name: "", color: "slate" });
 
   const load = async () => {
-    const [c, s] = await Promise.all([api.get("/settings/company"), api.get("/statuses")]);
-    setCompany(c.data);
-    setStatuses(s.data);
+    try {
+      if (isOwner) {
+        const [c, s] = await Promise.all([api.get("/settings/company"), api.get("/statuses")]);
+        setCompany(c.data);
+        setStatuses(s.data);
+      } else {
+        const s = await api.get("/statuses");
+        setStatuses(s.data);
+      }
+    } catch (e) { /* non-fatal */ }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
   const saveCompany = async () => {
     try {
@@ -59,6 +68,7 @@ export default function Settings() {
         <TabsList className="bg-white border border-slate-200 mb-5">
           {isOwner && <TabsTrigger value="company" data-testid="tab-company">Company</TabsTrigger>}
           {isOwner && <TabsTrigger value="statuses" data-testid="tab-statuses">Lead statuses</TabsTrigger>}
+          <TabsTrigger value="appearance" data-testid="tab-appearance">Appearance</TabsTrigger>
           <TabsTrigger value="profile" data-testid="tab-profile">My profile</TabsTrigger>
         </TabsList>
 
@@ -122,13 +132,67 @@ export default function Settings() {
           </TabsContent>
         )}
 
+        <TabsContent value="appearance">
+          <Card className="p-6 border-slate-200 rounded-md shadow-sm">
+            <div className="flex items-center gap-2 mb-1">
+              <Palette size={16} className="text-[#026AA2]"/>
+              <h2 className="font-heading text-base font-semibold text-slate-900">Appearance</h2>
+            </div>
+            <p className="text-xs text-slate-500 mb-5">Choose how HN CRM looks on this device.</p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl">
+              <button
+                type="button"
+                onClick={() => setTheme("light")}
+                data-testid="theme-light"
+                className={`text-left p-4 rounded-md border-2 transition-all ${
+                  theme === "light"
+                    ? "border-[#026AA2] bg-sky-50/50"
+                    : "border-slate-200 hover:border-slate-300 bg-white"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Sun size={16} className="text-amber-500"/>
+                  <span className="font-medium text-slate-900 text-sm">Light</span>
+                  {theme === "light" && <span className="ml-auto text-[10px] uppercase tracking-wider text-[#026AA2] font-semibold">Active</span>}
+                </div>
+                <div className="h-16 rounded border border-slate-200 bg-gradient-to-br from-white to-slate-50 flex items-center justify-center">
+                  <div className="w-24 h-2 bg-slate-200 rounded"></div>
+                </div>
+                <p className="text-xs text-slate-500 mt-2.5">Clean and bright — perfect for daylight.</p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setTheme("dark")}
+                data-testid="theme-dark"
+                className={`text-left p-4 rounded-md border-2 transition-all ${
+                  theme === "dark"
+                    ? "border-sky-400 bg-sky-50/50"
+                    : "border-slate-200 hover:border-slate-300 bg-white"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Moon size={16} className="text-indigo-500"/>
+                  <span className="font-medium text-slate-900 text-sm">Dark</span>
+                  {theme === "dark" && <span className="ml-auto text-[10px] uppercase tracking-wider text-sky-500 font-semibold">Active</span>}
+                </div>
+                <div className="h-16 rounded border border-slate-700 bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
+                  <div className="w-24 h-2 bg-slate-600 rounded"></div>
+                </div>
+                <p className="text-xs text-slate-500 mt-2.5">Easier on the eyes for evening calls.</p>
+              </button>
+            </div>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="profile">
           <Card className="p-6 border-slate-200 rounded-md shadow-sm mb-5">
             <h2 className="font-heading text-base font-semibold text-slate-900 mb-4">My profile</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label className="text-xs">Name</Label>
-                <Input value={`${user?.first_name} ${user?.last_name}`} disabled className="mt-1.5"/>
+                <Input value={`${user?.first_name || ""} ${user?.last_name || ""}`} disabled className="mt-1.5"/>
               </div>
               <div>
                 <Label className="text-xs">Email</Label>
@@ -151,53 +215,50 @@ export default function Settings() {
     </div>
   );
 }
-        {isOwner && (
-          <TabsContent value="statuses">
-            <Card className="p-6 border-slate-200 rounded-md shadow-sm">
-              <h2 className="font-heading text-base font-semibold text-slate-900 mb-1">Lead statuses</h2>
-              <p className="text-xs text-slate-500 mb-4">Add or remove statuses agents can apply to leads.</p>
-              <div className="flex flex-wrap gap-2 mb-5">
-                {statuses.map((s) => (
-                  <div key={s.id} className="flex items-center gap-2 border border-slate-200 rounded-md px-2 py-1.5 bg-white">
-                    <StatusBadge status={s.name}/>
-                    <button onClick={() => removeStatus(s.id)} className="text-slate-400 hover:text-red-600 text-xs ml-1" data-testid={`del-status-${s.id}`}>×</button>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2 max-w-md">
-                <Input placeholder="New status name" value={newStatus.name} onChange={(e) => setNewStatus({ ...newStatus, name: e.target.value })} data-testid="new-status-name"/>
-                <Button onClick={addStatus} className="text-white shrink-0" style={{ background: "#026AA2" }} data-testid="add-status">
-                  <Plus size={14} className="mr-1.5"/> Add
-                </Button>
-              </div>
-            </Card>
-          </TabsContent>
-        )}
 
-        <TabsContent value="profile">
-          <Card className="p-6 border-slate-200 rounded-md shadow-sm">
-            <h2 className="font-heading text-base font-semibold text-slate-900 mb-4">My profile</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label className="text-xs">Name</Label>
-                <Input value={`${user?.first_name} ${user?.last_name}`} disabled className="mt-1.5"/>
-              </div>
-              <div>
-                <Label className="text-xs">Email</Label>
-                <Input value={user?.email || ""} disabled className="mt-1.5"/>
-              </div>
-              <div>
-                <Label className="text-xs">Role</Label>
-                <Input value={user?.role || ""} disabled className="mt-1.5 capitalize"/>
-              </div>
-              <div>
-                <Label className="text-xs">Status</Label>
-                <Input value={user?.status || ""} disabled className="mt-1.5"/>
-              </div>
-            </div>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </div>
+function ChangePasswordCard() {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!current || !next || !confirm) return toast.error("All fields are required");
+    if (next.length < 8) return toast.error("New password must be at least 8 characters");
+    if (next !== confirm) return toast.error("New passwords don't match");
+    setSaving(true);
+    try {
+      await api.post("/users/me/change-password", { current_password: current, new_password: next });
+      toast.success("Password changed");
+      setCurrent(""); setNext(""); setConfirm("");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Card className="p-6 border-slate-200 rounded-md shadow-sm">
+      <div className="flex items-center gap-2 mb-4">
+        <KeyRound size={16} className="text-[#026AA2]"/>
+        <h2 className="font-heading text-base font-semibold text-slate-900">Change password</h2>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-3xl">
+        <div>
+          <Label className="text-xs">Current password</Label>
+          <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} className="mt-1.5" data-testid="cur-pass"/>
+        </div>
+        <div>
+          <Label className="text-xs">New password</Label>
+          <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} className="mt-1.5" data-testid="new-pass"/>
+        </div>
+        <div>
+          <Label className="text-xs">Confirm new password</Label>
+          <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="mt-1.5" data-testid="confirm-pass"/>
+        </div>
+      </div>
+      <Button onClick={submit} disabled={saving} className="mt-5 text-white" style={{ background: "#026AA2" }} data-testid="save-password">
+        {saving ? "Saving…" : "Change password"}
+      </Button>
+    </Card>
   );
 }

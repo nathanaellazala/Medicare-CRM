@@ -16,6 +16,19 @@
     --border: #E2E8F0;
 }
 
+html.dark {
+    --bg-page: #0B1220;
+    --bg-card: #131B2C;
+    --primary: #38BDF8;
+    --primary-hover: #7DD3FC;
+    --primary-light: #0F2337;
+    --text-primary: #E2E8F0;
+    --text-secondary: #94A3B8;
+    --text-muted: #64748B;
+    --border: #1E293B;
+    color-scheme: dark;
+}
+
 body {
     margin: 0;
     font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
@@ -54,6 +67,28 @@ h1, h2, h3, h4, h5, h6, .font-heading {
         --ring: 201 98% 32%;
         --radius: 0.5rem;
     }
+
+    html.dark {
+        --background: 222 47% 8%;
+        --foreground: 210 40% 96%;
+        --card: 222 40% 12%;
+        --card-foreground: 210 40% 96%;
+        --popover: 222 40% 12%;
+        --popover-foreground: 210 40% 96%;
+        --primary: 199 89% 65%;
+        --primary-foreground: 222 47% 8%;
+        --secondary: 222 30% 18%;
+        --secondary-foreground: 210 40% 96%;
+        --muted: 222 30% 18%;
+        --muted-foreground: 215 16% 65%;
+        --accent: 222 30% 18%;
+        --accent-foreground: 210 40% 96%;
+        --destructive: 0 62% 45%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 222 30% 20%;
+        --input: 222 30% 20%;
+        --ring: 199 89% 65%;
+    }
 }
 
 @layer base {
@@ -66,11 +101,19 @@ h1, h2, h3, h4, h5, h6, .font-heading {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+html.dark ::-webkit-scrollbar-thumb { background: #334155; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
 /* Smooth focus rings */
 button, input, select, textarea { outline: none; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
     box-shadow: 0 0 0 3px rgba(2, 106, 162, 0.2);
+}
+html.dark button:focus-visible,
+html.dark input:focus-visible,
+html.dark select:focus-visible,
+html.dark textarea:focus-visible {
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25);
 }
 
 .crm-table thead th {
@@ -101,4 +144,73 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 }
 .kpi-card:hover {
     border-color: #CBD5E1;
+}
+
+/* ============================================================================
+   DARK MODE — surgical overrides for existing hardcoded tailwind slate colors
+   ========================================================================= */
+html.dark body { background: #0B1220; color: #E2E8F0; }
+
+html.dark .bg-white { background-color: #131B2C !important; }
+html.dark .bg-slate-50 { background-color: #0F1A2E !important; }
+html.dark .bg-slate-100 { background-color: #1E293B !important; }
+html.dark .bg-slate-200 { background-color: #1E293B !important; }
+html.dark .bg-sky-50, html.dark .bg-sky-50\/50 { background-color: #0F2337 !important; }
+html.dark .bg-emerald-50 { background-color: #052e21 !important; }
+html.dark .bg-amber-50 { background-color: #3a2a05 !important; }
+html.dark .bg-green-50 { background-color: #052e21 !important; }
+
+html.dark .text-slate-900 { color: #F1F5F9 !important; }
+html.dark .text-slate-800 { color: #E2E8F0 !important; }
+html.dark .text-slate-700 { color: #CBD5E1 !important; }
+html.dark .text-slate-600 { color: #94A3B8 !important; }
+html.dark .text-slate-500 { color: #94A3B8 !important; }
+html.dark .text-slate-400 { color: #64748B !important; }
+html.dark .text-slate-300 { color: #475569 !important; }
+
+html.dark .border-slate-100 { border-color: #1E293B !important; }
+html.dark .border-slate-200 { border-color: #1E293B !important; }
+html.dark .border-slate-300 { border-color: #334155 !important; }
+
+html.dark .hover\:bg-slate-50:hover { background-color: #1E293B !important; }
+html.dark .hover\:bg-slate-100:hover { background-color: #253449 !important; }
+html.dark .hover\:bg-sky-50:hover { background-color: #0F2337 !important; }
+
+html.dark .crm-table thead th {
+    background: #0F1A2E;
+    color: #94A3B8;
+    border-bottom-color: #1E293B;
+}
+html.dark .crm-table tbody tr {
+    border-bottom-color: #1E293B;
+}
+html.dark .crm-table tbody tr:hover {
+    background: #1E293B;
+}
+html.dark .kpi-card {
+    background: #131B2C;
+    border-color: #1E293B;
+}
+html.dark .kpi-card:hover {
+    border-color: #334155;
+}
+
+/* Inputs & selects when dark */
+html.dark input,
+html.dark textarea,
+html.dark select,
+html.dark [role="combobox"] {
+    background-color: #0F1A2E !important;
+    color: #E2E8F0 !important;
+    border-color: #1E293B !important;
+}
+html.dark input::placeholder,
+html.dark textarea::placeholder { color: #64748B !important; }
+
+/* Dialog / popover backgrounds */
+html.dark [role="dialog"],
+html.dark [data-radix-popper-content-wrapper] > * {
+    background-color: #131B2C !important;
+    color: #E2E8F0 !important;
+    border-color: #1E293B !important;
 }

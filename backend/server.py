@@ -1383,6 +1383,11 @@ async def toggleable_fields(_: dict = Depends(get_current_user)):
 # ============================================================================
 # App wiring
 # ============================================================================
+@app.get("/health")
+async def health():
+    """Kubernetes liveness/readiness probe. Kept outside /api prefix."""
+    return {"status": "ok"}
+
 app.include_router(api)
 
 app.add_middleware(

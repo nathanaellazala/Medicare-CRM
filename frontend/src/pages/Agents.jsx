@@ -5,26 +5,26 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { UserPlus, KeyRound, Power, CheckCircle, Trophy, Circle, ShieldCheck } from "lucide-react";
+import { UserPlus, KeyRound, CheckCircle, Trophy, Circle, ShieldCheck, Pencil, Save } from "lucide-react";
 
 export default function Agents() {
   const [agents, setAgents] = useState([]);
   const [openCreate, setOpenCreate] = useState(false);
-  const [openReset, setOpenReset] = useState(null);
-  const [openPerms, setOpenPerms] = useState(null); // agent object
-  const [permFields, setPermFields] = useState([]); // {key,label}[]
+  const [openEdit, setOpenEdit] = useState(null);      // agent being edited
+  const [editForm, setEditForm] = useState({});
+  const [openPerms, setOpenPerms] = useState(null);
+  const [permFields, setPermFields] = useState([]);
   const [permSelected, setPermSelected] = useState([]);
   const [form, setForm] = useState({ first_name: "", last_name: "", email: "", password: "" });
-  const [newPassword, setNewPassword] = useState("");
+  const [resetPass, setResetPass] = useState("");
 
   const load = async () => {
     const { data } = await api.get("/users");
-    // Enrich each user with today/week activity minutes
     const enriched = await Promise.all(data.map(async (u) => {
       try {
         const { data: act } = await api.get(`/users/${u.id}/activity`);
@@ -40,6 +40,41 @@ export default function Agents() {
     api.get("/constants/toggleable-fields").then((r) => setPermFields(r.data)).catch(() => {});
   }, []);
 
+  // ---- Edit agent modal ----
+  const openEditModal = (a) => {
+    setOpenEdit(a);
+    setEditForm({
+      first_name: a.first_name || "",
+      last_name: a.last_name || "",
+      email: a.email || "",
+      status: a.status || "active",
+      on_leaderboard: a.on_leaderboard !== false,
+    });
+    setResetPass("");
+  };
+
+  const saveEdit = async () => {
+    if (!openEdit) return;
+    try {
+      const payload = {
+        first_name: editForm.first_name,
+        last_name: editForm.last_name,
+        email: editForm.email,
+        status: editForm.status,
+        on_leaderboard: editForm.on_leaderboard,
+      };
+      await api.patch(`/users/${openEdit.id}`, payload);
+      if (resetPass) {
+        if (resetPass.length < 8) { toast.error("New password must be 8+ chars"); return; }
+        await api.post(`/users/${openEdit.id}/reset-password`, { password: resetPass });
+      }
+      toast.success(`${editForm.first_name} updated`);
+      setOpenEdit(null);
+      load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  // ---- Permissions modal ----
   const openPermissions = (a) => {
     setOpenPerms(a);
     setPermSelected(a.visible_fields || permFields.map((f) => f.key));
@@ -71,39 +106,13 @@ export default function Agents() {
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
-  const toggleStatus = async (a) => {
-    try {
-      await api.patch(`/users/${a.id}`, { status: a.status === "active" ? "inactive" : "active" });
-      toast.success("Updated");
-      load();
-    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
-  };
-
-  const toggleLeaderboard = async (a) => {
-    try {
-      await api.patch(`/users/${a.id}`, { on_leaderboard: !a.on_leaderboard });
-      toast.success(a.on_leaderboard ? "Removed from leaderboard" : "Added to leaderboard");
-      load();
-    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
-  };
-
-  const resetPassword = async () => {
-    if (!newPassword || newPassword.length < 6) return toast.error("Password must be 6+ chars");
-    try {
-      await api.post(`/users/${openReset.id}/reset-password`, { password: newPassword });
-      toast.success("Password reset");
-      setOpenReset(null);
-      setNewPassword("");
-    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
-  };
-
   return (
     <div className="p-6 md:p-8">
       <div className="flex items-end justify-between mb-6">
         <div>
           <div className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-1.5">Team</div>
           <h1 className="font-heading text-2xl font-semibold text-slate-900">Agents</h1>
-          <p className="text-sm text-slate-500 mt-1">Manage agents, reset passwords, deactivate accounts.</p>
+          <p className="text-sm text-slate-500 mt-1">Click an agent's name to edit — change details, toggle leaderboard visibility, deactivate, or reset password.</p>
         </div>
         <Dialog open={openCreate} onOpenChange={setOpenCreate}>
           <DialogTrigger asChild>
@@ -167,11 +176,12 @@ export default function Agents() {
                     <span>{a.first_name} {a.last_name}</span>
                   ) : (
                     <button
-                      onClick={() => openPermissions(a)}
-                      className="text-slate-900 hover:text-[#026AA2] hover:underline text-left"
+                      onClick={() => openEditModal(a)}
+                      className="text-slate-900 hover:text-[#026AA2] hover:underline text-left inline-flex items-center gap-1.5"
                       data-testid={`agent-name-${a.id}`}
                     >
                       {a.first_name} {a.last_name}
+                      <Pencil size={11} className="text-slate-400"/>
                     </button>
                   )}
                 </td>
@@ -197,23 +207,22 @@ export default function Agents() {
                     a.status === "active"
                       ? "bg-green-50 text-green-700 border-green-200"
                       : "bg-slate-100 text-slate-600 border-slate-200"
-                  }`}>{a.status}</span>
+                  }`} data-testid={`status-${a.id}`}>{a.status}</span>
                 </td>
                 <td className="px-4 py-3">
                   {a.role === "owner" ? (
                     <span className="text-xs text-slate-400">—</span>
                   ) : (
-                    <button
-                      onClick={() => toggleLeaderboard(a)}
-                      data-testid={`lb-toggle-${a.id}`}
-                      className={`text-xs px-2 py-0.5 rounded-full border inline-flex items-center gap-1 hover:opacity-80 ${
+                    <span
+                      data-testid={`lb-${a.id}`}
+                      className={`text-xs px-2 py-0.5 rounded-full border inline-flex items-center gap-1 ${
                         a.on_leaderboard !== false
                           ? "bg-amber-50 text-amber-800 border-amber-200"
                           : "bg-slate-100 text-slate-500 border-slate-200"
                       }`}
                     >
                       <Trophy size={10}/> {a.on_leaderboard !== false ? "Visible" : "Hidden"}
-                    </button>
+                    </span>
                   )}
                 </td>
                 <td className="px-4 py-3 text-xs text-slate-500">
@@ -222,22 +231,24 @@ export default function Agents() {
                 <td className="px-4 py-3 text-right">
                   <div className="flex justify-end gap-1">
                     {a.role !== "owner" && (
-                      <Button
-                        onClick={() => openPermissions(a)}
-                        className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-sky-50 hover:text-[#026AA2] hover:border-[#026AA2]"
-                        title="Manage access to lead fields"
-                        data-testid={`perms-${a.id}`}
-                      >
-                        <ShieldCheck size={12}/>
-                      </Button>
-                    )}
-                    <Button onClick={() => setOpenReset(a)} className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" data-testid={`reset-${a.id}`}>
-                      <KeyRound size={12}/>
-                    </Button>
-                    {a.role !== "owner" && (
-                      <Button onClick={() => toggleStatus(a)} className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" data-testid={`toggle-${a.id}`}>
-                        <Power size={12}/>
-                      </Button>
+                      <>
+                        <Button
+                          onClick={() => openEditModal(a)}
+                          className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-sky-50 hover:text-[#026AA2] hover:border-[#026AA2]"
+                          title="Edit agent"
+                          data-testid={`edit-${a.id}`}
+                        >
+                          <Pencil size={12}/>
+                        </Button>
+                        <Button
+                          onClick={() => openPermissions(a)}
+                          className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-sky-50 hover:text-[#026AA2] hover:border-[#026AA2]"
+                          title="Manage lead-field access"
+                          data-testid={`perms-${a.id}`}
+                        >
+                          <ShieldCheck size={12}/>
+                        </Button>
+                      </>
                     )}
                   </div>
                 </td>
@@ -248,21 +259,112 @@ export default function Agents() {
         </table>
       </Card>
 
-      <Dialog open={!!openReset} onOpenChange={(o) => { if (!o) setOpenReset(null); }}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Reset password for {openReset?.first_name}</DialogTitle></DialogHeader>
-          <div>
-            <Label className="text-xs">New password</Label>
-            <Input type="text" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="mt-1.5" data-testid="new-pass-input"/>
+      {/* ================ EDIT AGENT MODAL ================ */}
+      <Dialog open={!!openEdit} onOpenChange={(o) => { if (!o) setOpenEdit(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil size={16} className="text-[#026AA2]"/>
+              Edit {openEdit?.first_name} {openEdit?.last_name}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">First name</Label>
+                <Input
+                  value={editForm.first_name || ""}
+                  onChange={(e) => setEditForm({ ...editForm, first_name: e.target.value })}
+                  className="mt-1.5"
+                  data-testid="edit-first"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Last name</Label>
+                <Input
+                  value={editForm.last_name || ""}
+                  onChange={(e) => setEditForm({ ...editForm, last_name: e.target.value })}
+                  className="mt-1.5"
+                  data-testid="edit-last"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-xs">Email</Label>
+              <Input
+                type="email"
+                value={editForm.email || ""}
+                onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                className="mt-1.5"
+                data-testid="edit-email"
+              />
+            </div>
+
+            <div className="pt-2 border-t border-slate-200 space-y-3">
+              <div className="flex items-center justify-between p-3 rounded-md border border-slate-200 bg-slate-50">
+                <div>
+                  <div className="text-sm font-medium text-slate-900 flex items-center gap-1.5">
+                    <CheckCircle size={13} className={editForm.status === "active" ? "text-green-600" : "text-slate-400"}/>
+                    Account active
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Deactivated agents can't log in and won't receive new lead assignments.
+                  </div>
+                </div>
+                <Switch
+                  checked={editForm.status === "active"}
+                  onCheckedChange={(v) => setEditForm({ ...editForm, status: v ? "active" : "inactive" })}
+                  data-testid="edit-status-switch"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-md border border-slate-200 bg-slate-50">
+                <div>
+                  <div className="text-sm font-medium text-slate-900 flex items-center gap-1.5">
+                    <Trophy size={13} className={editForm.on_leaderboard ? "text-amber-500" : "text-slate-400"}/>
+                    Show on leaderboard
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Hide this agent from the leaderboard without deactivating them.
+                  </div>
+                </div>
+                <Switch
+                  checked={!!editForm.on_leaderboard}
+                  onCheckedChange={(v) => setEditForm({ ...editForm, on_leaderboard: v })}
+                  data-testid="edit-lb-switch"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-200">
+              <Label className="text-xs flex items-center gap-1.5">
+                <KeyRound size={12} className="text-slate-500"/>
+                Reset password (optional)
+              </Label>
+              <Input
+                type="text"
+                value={resetPass}
+                onChange={(e) => setResetPass(e.target.value)}
+                placeholder="Leave blank to keep current password"
+                className="mt-1.5"
+                data-testid="edit-new-pass"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Min 8 characters. Share the new password with your agent securely.</p>
+            </div>
           </div>
+
           <DialogFooter>
-            <Button onClick={() => setOpenReset(null)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</Button>
-            <Button onClick={resetPassword} className="text-white" style={{ background: "#026AA2" }} data-testid="confirm-reset">Reset</Button>
+            <Button onClick={() => setOpenEdit(null)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" data-testid="edit-cancel">Cancel</Button>
+            <Button onClick={saveEdit} className="text-white" style={{ background: "#026AA2" }} data-testid="edit-save">
+              <Save size={13} className="mr-1.5"/> Save changes
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Manage access modal */}
+      {/* ================ PERMISSIONS MODAL ================ */}
       <Dialog open={!!openPerms} onOpenChange={(o) => { if (!o) setOpenPerms(null); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
