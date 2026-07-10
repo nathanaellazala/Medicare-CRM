@@ -55,15 +55,18 @@ DEFAULT_STATUSES = [
     {"name": "Not Interested", "color": "red", "sort_order": 6},
     {"name": "Wrong Number", "color": "red", "sort_order": 7},
     {"name": "Disconnected Number", "color": "red", "sort_order": 8},
-    {"name": "Call Back Later", "color": "blue", "sort_order": 9},
-    {"name": "Appointment Set", "color": "purple", "sort_order": 10},
-    {"name": "Application Started", "color": "indigo", "sort_order": 11},
-    {"name": "Pending", "color": "teal", "sort_order": 12},
-    {"name": "Complete", "color": "green", "sort_order": 13},
-    {"name": "Do Not Call", "color": "black", "sort_order": 14},
-    {"name": "Duplicate", "color": "slate", "sort_order": 15},
-    {"name": "Ineligible", "color": "slate", "sort_order": 16},
+    {"name": "Language Barrier", "color": "amber", "sort_order": 9},
+    {"name": "Call Back Later", "color": "blue", "sort_order": 10},
+    {"name": "Appointment Set", "color": "purple", "sort_order": 11},
+    {"name": "Application Started", "color": "indigo", "sort_order": 12},
+    {"name": "Pending", "color": "teal", "sort_order": 13},
+    {"name": "Pending Completion", "color": "teal", "sort_order": 14},
+    {"name": "Complete", "color": "green", "sort_order": 15},
+    {"name": "Do Not Call", "color": "black", "sort_order": 16},
+    {"name": "Duplicate", "color": "slate", "sort_order": 17},
+    {"name": "Ineligible", "color": "slate", "sort_order": 18},
 ]
+DEFAULT_STATUS_NAMES = {s["name"] for s in DEFAULT_STATUSES}
 
 CALL_RESULTS = [
     "No Answer", "Left Voicemail", "Spoke With Lead", "Not Interested",
@@ -545,6 +548,11 @@ async def update_status(sid: str, body: StatusIn, user: dict = Depends(require_o
 
 @api.delete("/statuses/{sid}")
 async def delete_status(sid: str, user: dict = Depends(require_owner)):
+    doc = await db.lead_statuses.find_one({"_id": sid})
+    if not doc:
+        raise HTTPException(404, "Status not found")
+    if doc.get("is_default") or doc.get("name") in DEFAULT_STATUS_NAMES:
+        raise HTTPException(400, "System statuses cannot be deleted. You can add custom statuses alongside them.")
     await db.lead_statuses.update_one({"_id": sid}, {"$set": {"is_active": False}})
     return {"ok": True}
 
@@ -1421,19 +1429,38 @@ async def startup():
     await db.lead_statuses.update_many({"name": "Sold"}, {"$set": {"name": "Complete"}})
     await db.leads.update_many({"lead_status": "Sold"}, {"$set": {"lead_status": "Complete"}})
 
-    # Migration: ensure "Pending Completion" status exists
-    if not await db.lead_statuses.find_one({"name": "Pending Completion"}):
-        await db.lead_statuses.insert_one({
-            "_id": str(uuid.uuid4()),
-            "name": "Pending Completion", "color": "teal", "sort_order": 12,
-            "is_active": True, "created_at": now_iso(), "updated_at": now_iso(),
-        })
+    # Ensure ALL default statuses exist, are active, and marked is_default: True.
+    # If an owner had previously "deleted" (soft-deactivated) one of the defaults
+    # like "Complete", this restores it automatically so critical flows
+    # (Book of Business, funnel metrics) keep working.
+    for s in DEFAULT_STATUSES:
+        existing = await db.lead_statuses.find_one({"name": s["name"]})
+        if existing:
+            await db.lead_statuses.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {
+                    "is_default": True,
+                    "is_active": True,
+                    "color": existing.get("color") or s["color"],
+                    "sort_order": existing.get("sort_order") or s["sort_order"],
+                    "updated_at": now_iso(),
+                }},
+            )
+        else:
+            await db.lead_statuses.insert_one({
+                "_id": str(uuid.uuid4()),
+                **s,
+                "is_default": True,
+                "is_active": True,
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            })
 
-    # Seed statuses
+    # Seed statuses (only if collection is entirely empty — kept for first-boot safety)
     if await db.lead_statuses.count_documents({}) == 0:
         for s in DEFAULT_STATUSES:
             await db.lead_statuses.insert_one({
-                "_id": str(uuid.uuid4()), **s, "is_active": True,
+                "_id": str(uuid.uuid4()), **s, "is_default": True, "is_active": True,
                 "created_at": now_iso(), "updated_at": now_iso(),
             })
 

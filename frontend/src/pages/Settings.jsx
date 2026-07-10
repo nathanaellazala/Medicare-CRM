@@ -118,10 +118,29 @@ export default function Settings() {
                 {statuses.map((s) => (
                   <div key={s.id} className="flex items-center gap-2 border border-slate-200 rounded-md px-2 py-1.5 bg-white">
                     <StatusBadge status={s.name}/>
-                    <button onClick={() => removeStatus(s.id)} className="text-slate-400 hover:text-red-600 text-xs ml-1" data-testid={`del-status-${s.id}`}>×</button>
+                    {s.is_default ? (
+                      <span
+                        className="text-slate-300 text-[10px] ml-1 uppercase tracking-wider"
+                        title="System status — cannot be deleted"
+                        data-testid={`locked-status-${s.id}`}
+                      >
+                        LOCKED
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => removeStatus(s.id)}
+                        className="text-slate-400 hover:text-red-600 text-xs ml-1"
+                        data-testid={`del-status-${s.id}`}
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
+              <p className="text-[11px] text-slate-500 mb-3">
+                <span className="uppercase tracking-wider text-slate-400 font-medium">Locked</span> statuses are used by core features (Book of Business, dashboard funnel, leaderboard) and can't be removed.
+              </p>
               <div className="flex gap-2 max-w-md">
                 <Input placeholder="New status name" value={newStatus.name} onChange={(e) => setNewStatus({ ...newStatus, name: e.target.value })} data-testid="new-status-name"/>
                 <Button onClick={addStatus} className="text-white shrink-0" style={{ background: "#026AA2" }} data-testid="add-status">

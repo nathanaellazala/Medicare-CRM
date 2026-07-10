@@ -8,6 +8,8 @@ const STATUS_STYLES = {
   "Appointment Set":      { bg: "#F3E8FF", text: "#7E22CE", border: "#E9D5FF" },
   "Application Started":  { bg: "#E0E7FF", text: "#4338CA", border: "#C7D2FE" },
   Pending:                { bg: "#CCFBF1", text: "#0F766E", border: "#99F6E4" },
+  "Pending Completion":   { bg: "#CCFBF1", text: "#0F766E", border: "#99F6E4" },
+  "Language Barrier":     { bg: "#FEF3C7", text: "#92400E", border: "#FDE68A" },
   Complete:               { bg: "#DCFCE7", text: "#15803D", border: "#BBF7D0" },
   Sold:                   { bg: "#DCFCE7", text: "#15803D", border: "#BBF7D0" },
   "Not Interested":       { bg: "#FEE2E2", text: "#B91C1C", border: "#FECACA" },
