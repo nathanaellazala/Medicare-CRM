@@ -2,11 +2,17 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatApiError, formatBirthdate } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, Search, ChevronRight, Download, Award } from "lucide-react";
+import { CheckCircle2, Search, ChevronRight, Download, Award, Calendar as CalIcon, User as UserIcon, Pencil } from "lucide-react";
 import { toast } from "sonner";
+
+function formatDateShort(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
 
 export default function BookOfBusiness() {
   const { user } = useAuth();
@@ -16,6 +22,8 @@ export default function BookOfBusiness() {
   const [total, setTotal] = useState(0);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
+  const [editingEffective, setEditingEffective] = useState(null); // lead id
+  const [effectiveDraft, setEffectiveDraft] = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -35,6 +43,23 @@ export default function BookOfBusiness() {
     return () => clearTimeout(t);
     // eslint-disable-next-line
   }, [q]);
+
+  const startEditEffective = (e, lead) => {
+    e.stopPropagation();
+    setEditingEffective(lead.id);
+    setEffectiveDraft(lead.effective_date || "");
+  };
+
+  const saveEffectiveDate = async (leadId) => {
+    try {
+      await api.patch(`/leads/${leadId}`, { effective_date: effectiveDraft || null });
+      toast.success("Effective date saved");
+      setEditingEffective(null);
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    }
+  };
 
   return (
     <div className="p-6 md:p-8">
@@ -84,17 +109,27 @@ export default function BookOfBusiness() {
                 <th className="px-4 py-3">Birthdate</th>
                 <th className="px-4 py-3">City / State</th>
                 <th className="px-4 py-3">Provider</th>
-                <th className="px-4 py-3">Completed</th>
+                <th className="px-4 py-3">
+                  <span className="inline-flex items-center gap-1"><CalIcon size={11}/> Effective</span>
+                </th>
+                <th className="px-4 py-3">
+                  <span className="inline-flex items-center gap-1"><CheckCircle2 size={11}/> Completed</span>
+                </th>
+                {isOwner && (
+                  <th className="px-4 py-3">
+                    <span className="inline-flex items-center gap-1"><UserIcon size={11}/> Completed by</span>
+                  </th>
+                )}
                 <th className="px-4 py-3 w-10"></th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={7} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
+                <tr><td colSpan={isOwner ? 9 : 8} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
               )}
               {!loading && items.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="text-center py-14 text-slate-400">
+                  <td colSpan={isOwner ? 9 : 8} className="text-center py-14 text-slate-400">
                     <CheckCircle2 size={28} className="mx-auto mb-2 text-slate-300"/>
                     <div className="text-sm font-medium text-slate-600">No completed clients yet.</div>
                     <div className="text-xs">Mark a lead as Complete to see it here.</div>
@@ -115,9 +150,52 @@ export default function BookOfBusiness() {
                   <td className="px-4 py-3 text-sm text-slate-700">{formatBirthdate(lead.birthdate) || "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.city ? `${lead.city}, ${lead.state}` : "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.medicaid_provider || "—"}</td>
-                  <td className="px-4 py-3 text-xs text-slate-500">
-                    {lead.updated_at ? new Date(lead.updated_at).toLocaleDateString() : "—"}
+                  <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
+                    {editingEffective === lead.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="date"
+                          value={effectiveDraft}
+                          onChange={(e) => setEffectiveDraft(e.target.value)}
+                          className="h-7 text-xs w-36"
+                          autoFocus
+                          data-testid={`eff-input-${lead.id}`}
+                        />
+                        <Button
+                          onClick={() => saveEffectiveDate(lead.id)}
+                          className="h-7 px-2 text-xs text-white"
+                          style={{ background: "#026AA2" }}
+                          data-testid={`eff-save-${lead.id}`}
+                        >Save</Button>
+                        <button
+                          onClick={() => setEditingEffective(null)}
+                          className="text-xs text-slate-500 hover:text-slate-800"
+                        >Cancel</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => startEditEffective(e, lead)}
+                        className="inline-flex items-center gap-1.5 text-slate-700 hover:text-[#026AA2] hover:underline"
+                        data-testid={`eff-edit-${lead.id}`}
+                      >
+                        {formatDateShort(lead.effective_date)}
+                        <Pencil size={10} className="text-slate-400"/>
+                      </button>
+                    )}
                   </td>
+                  <td className="px-4 py-3 text-xs text-slate-600" data-testid={`bob-completed-${lead.id}`}>
+                    {formatDateShort(lead.completed_at || lead.updated_at)}
+                  </td>
+                  {isOwner && (
+                    <td className="px-4 py-3 text-sm text-slate-700" data-testid={`bob-cb-${lead.id}`}>
+                      {lead.completed_by_name ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <UserIcon size={11} className="text-slate-400"/>
+                          {lead.completed_by_name}
+                        </span>
+                      ) : <span className="text-slate-400">—</span>}
+                    </td>
+                  )}
                   <td className="px-2 py-3 text-slate-400"><ChevronRight size={14}/></td>
                 </tr>
               ))}

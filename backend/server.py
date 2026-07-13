@@ -289,6 +289,7 @@ class LeadIn(BaseModel):
     assigned_agent_id: Optional[str] = None
     application_info: Optional[Dict[str, Any]] = None
     hra_info: Optional[Dict[str, Any]] = None
+    effective_date: Optional[str] = None
 
 class LeadUpdateIn(BaseModel):
     first_name: Optional[str] = None
@@ -311,6 +312,7 @@ class LeadUpdateIn(BaseModel):
     assigned_agent_id: Optional[str] = None
     application_info: Optional[Dict[str, Any]] = None
     hra_info: Optional[Dict[str, Any]] = None
+    effective_date: Optional[str] = None
 
 class NoteIn(BaseModel):
     note_text: str
@@ -470,6 +472,96 @@ async def user_activity(user_id: str, user: dict = Depends(get_current_user)):
     # each heartbeat represents ~1 minute of activity
     return {"today_minutes": today_count, "week_minutes": week_count}
 
+
+@api.get("/users/{user_id}/activity-history")
+async def user_activity_history(user_id: str, user: dict = Depends(get_current_user)):
+    """Historical rolling activity for an agent — last 12 weeks & last 3 months.
+
+    Each bucket returns: minutes worked, calls logged, appointments set,
+    completes, notes added. Owners see any user; agents only themselves.
+    """
+    if user["role"] != "owner" and user["_id"] != user_id:
+        raise HTTPException(403, "Forbidden")
+
+    now = datetime.now(timezone.utc)
+
+    # ---- Weekly buckets (12 weeks incl. current, Monday-start) ----
+    today_midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    this_week_start = today_midnight - timedelta(days=now.weekday())
+    week_ranges = []
+    for i in range(12):
+        start = this_week_start - timedelta(weeks=(11 - i))
+        end = start + timedelta(days=7)
+        week_ranges.append({"key": start.strftime("%Y-%m-%d"), "label": f"Week of {start.strftime('%b %d')}", "start": start, "end": end})
+
+    # ---- Monthly buckets (3 months incl. current) ----
+    def _month_start(dt: datetime) -> datetime:
+        return datetime(dt.year, dt.month, 1, tzinfo=timezone.utc)
+
+    def _add_months(dt: datetime, delta: int) -> datetime:
+        total = dt.year * 12 + (dt.month - 1) + delta
+        y, m = total // 12, total % 12 + 1
+        return datetime(y, m, 1, tzinfo=timezone.utc)
+
+    this_month_start = _month_start(now)
+    month_ranges = []
+    for i in range(3):
+        start = _add_months(this_month_start, -(2 - i))
+        end = _add_months(start, 1)
+        month_ranges.append({"key": start.strftime("%Y-%m"), "label": start.strftime("%B %Y"), "start": start, "end": end})
+
+    # Query window spans the earliest bucket start
+    earliest = min(week_ranges[0]["start"], month_ranges[0]["start"])
+    earliest_iso = earliest.isoformat()
+
+    # ---- Fetch all events in the window in one shot per collection ----
+    pings = await db.activity_pings.find(
+        {"user_id": user_id, "ts": {"$gte": earliest_iso}},
+        {"ts": 1},
+    ).to_list(200000)
+
+    calls = await db.call_logs.find(
+        {"user_id": user_id, "created_at": {"$gte": earliest_iso}},
+        {"created_at": 1},
+    ).to_list(50000)
+
+    audits = await db.audit_logs.find(
+        {"user_id": user_id, "action_type": "status_changed", "created_at": {"$gte": earliest_iso}},
+        {"created_at": 1, "new_value": 1},
+    ).to_list(50000)
+
+    notes = await db.notes.find(
+        {"user_id": user_id, "created_at": {"$gte": earliest_iso}},
+        {"created_at": 1},
+    ).to_list(50000)
+
+    def _bucketize(ranges):
+        rows = []
+        for r in ranges:
+            s_iso, e_iso = r["start"].isoformat(), r["end"].isoformat()
+            minutes = sum(1 for p in pings if s_iso <= p.get("ts", "") < e_iso)
+            call_count = sum(1 for c in calls if s_iso <= c.get("created_at", "") < e_iso)
+            appt = sum(1 for a in audits if a.get("new_value") == "Appointment Set" and s_iso <= a.get("created_at", "") < e_iso)
+            comp = sum(1 for a in audits if a.get("new_value") == "Complete" and s_iso <= a.get("created_at", "") < e_iso)
+            note_count = sum(1 for n in notes if s_iso <= n.get("created_at", "") < e_iso)
+            rows.append({
+                "key": r["key"],
+                "label": r["label"],
+                "start": s_iso,
+                "end": e_iso,
+                "minutes": minutes,
+                "calls": call_count,
+                "appointments_set": appt,
+                "completes": comp,
+                "notes": note_count,
+            })
+        return rows
+
+    return {
+        "weeks": _bucketize(week_ranges),
+        "months": _bucketize(month_ranges),
+    }
+
 @api.post("/users")
 async def create_user(body: UserCreateIn, user: dict = Depends(require_owner)):
     email = body.email.lower().strip()
@@ -613,7 +705,24 @@ async def list_leads(
     sort_spec = sort_map.get(sort, [("updated_at", -1)])
     total = await db.leads.count_documents(f)
     items = await db.leads.find(f).sort(sort_spec).skip(skip).limit(limit).to_list(limit)
-    return {"total": total, "items": [mask_lead_for_user(clean_doc(d), user) for d in items]}
+
+    # Enrich with completed_by_name (small join) — only when there are Complete leads
+    completer_ids = list({d.get("completed_by_user_id") for d in items if d.get("completed_by_user_id")})
+    name_map = {}
+    if completer_ids:
+        async for u in db.users.find(
+            {"_id": {"$in": completer_ids}},
+            {"first_name": 1, "last_name": 1},
+        ):
+            name_map[u["_id"]] = f"{u.get('first_name','')} {u.get('last_name','')}".strip()
+
+    out = []
+    for d in items:
+        cleaned = mask_lead_for_user(clean_doc(d), user)
+        if d.get("completed_by_user_id"):
+            cleaned["completed_by_name"] = name_map.get(d["completed_by_user_id"])
+        out.append(cleaned)
+    return {"total": total, "items": out}
 
 @api.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
@@ -621,7 +730,15 @@ async def get_lead(lead_id: str, user: dict = Depends(get_current_user)):
     lead = await db.leads.find_one(f)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    return mask_lead_for_user(clean_doc(lead), user)
+    result = mask_lead_for_user(clean_doc(lead), user)
+    if lead.get("completed_by_user_id"):
+        completer = await db.users.find_one(
+            {"_id": lead["completed_by_user_id"]},
+            {"first_name": 1, "last_name": 1},
+        )
+        if completer:
+            result["completed_by_name"] = f"{completer.get('first_name','')} {completer.get('last_name','')}".strip()
+    return result
 
 @api.post("/leads")
 async def create_lead(body: LeadIn, user: dict = Depends(get_current_user)):
@@ -661,6 +778,22 @@ async def update_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depends(get
         fn = updates.get("first_name", existing.get("first_name", ""))
         ln = updates.get("last_name", existing.get("last_name", ""))
         updates["full_name"] = f"{fn} {ln}".strip()
+
+    # ------ Status transition side-effects ------
+    if "lead_status" in updates and updates["lead_status"] != existing.get("lead_status"):
+        if updates["lead_status"] == "Complete":
+            # Stamp completed_at + completed_by only on the initial transition
+            updates["completed_at"] = now_iso()
+            updates["completed_by_user_id"] = user["_id"]
+        elif existing.get("lead_status") == "Complete":
+            # Moved out of Complete — clear the completion metadata
+            updates["completed_at"] = None
+            updates["completed_by_user_id"] = None
+
+    # ------ Reassignment side-effect: reset activity clock ------
+    if "assigned_agent_id" in updates and updates["assigned_agent_id"] != existing.get("assigned_agent_id"):
+        updates["current_assignment_at"] = now_iso()
+
     updates["updated_at"] = now_iso()
     await db.leads.update_one({"_id": lead_id}, {"$set": updates})
     # audit individual key changes
@@ -694,19 +827,46 @@ def _audit_docs(user_id: str, action: str, lead_ids: List[str], new_value: Any =
 
 @api.post("/leads/bulk-status")
 async def bulk_status(body: BulkStatusIn, user: dict = Depends(require_owner)):
-    res = await db.leads.update_many(
-        {"_id": {"$in": body.lead_ids}},
-        {"$set": {"lead_status": body.lead_status, "updated_at": now_iso()}},
-    )
+    now = now_iso()
+    set_fields = {"lead_status": body.lead_status, "updated_at": now}
+    if body.lead_status == "Complete":
+        # Only stamp completed metadata on leads that aren't already Complete
+        await db.leads.update_many(
+            {"_id": {"$in": body.lead_ids}, "lead_status": {"$ne": "Complete"}},
+            {"$set": {**set_fields, "completed_at": now, "completed_by_user_id": user["_id"]}},
+        )
+        # For leads that were already Complete, just bump updated_at
+        res = await db.leads.update_many(
+            {"_id": {"$in": body.lead_ids}, "lead_status": "Complete"},
+            {"$set": {"updated_at": now}},
+        )
+        modified = len(body.lead_ids)
+    else:
+        # Clear completion metadata if moving out of Complete
+        await db.leads.update_many(
+            {"_id": {"$in": body.lead_ids}, "lead_status": "Complete"},
+            {"$set": {**set_fields, "completed_at": None, "completed_by_user_id": None}},
+        )
+        res = await db.leads.update_many(
+            {"_id": {"$in": body.lead_ids}, "lead_status": {"$ne": "Complete"}},
+            {"$set": set_fields},
+        )
+        modified = res.modified_count
     if body.lead_ids:
         await db.audit_logs.insert_many(_audit_docs(user["_id"], "status_changed", body.lead_ids, body.lead_status))
-    return {"modified": res.modified_count}
+    return {"modified": modified}
 
 @api.post("/leads/assign")
 async def assign_leads(body: AssignIn, user: dict = Depends(require_owner)):
+    now = now_iso()
     res = await db.leads.update_many(
         {"_id": {"$in": body.lead_ids}},
-        {"$set": {"assigned_agent_id": body.agent_id, "updated_at": now_iso()}},
+        {"$set": {
+            "assigned_agent_id": body.agent_id,
+            "updated_at": now,
+            # Reset per-lead activity clock so the new agent starts fresh
+            "current_assignment_at": now,
+        }},
     )
     if body.lead_ids:
         await db.audit_logs.insert_many(_audit_docs(user["_id"], "lead_assigned", body.lead_ids, body.agent_id))
@@ -728,7 +888,10 @@ async def round_robin(body: RoundRobinIn, user: dict = Depends(require_owner)):
     audits = []
     for i, lid in enumerate(lead_ids):
         agent = body.agent_ids[i % len(body.agent_ids)]
-        updates.append(UpdateOne({"_id": lid}, {"$set": {"assigned_agent_id": agent, "updated_at": ts}}))
+        updates.append(UpdateOne(
+            {"_id": lid},
+            {"$set": {"assigned_agent_id": agent, "updated_at": ts, "current_assignment_at": ts}},
+        ))
         audits.append({
             "_id": str(uuid.uuid4()), "user_id": user["_id"],
             "action_type": "lead_assigned", "entity_type": "lead", "entity_id": lid,
@@ -1477,6 +1640,30 @@ async def startup():
         {"visible_fields": {"$exists": False}},
         {"$set": {"visible_fields": list(DEFAULT_VISIBLE_FIELDS)}},
     )
+
+    # Backfill current_assignment_at from updated_at for legacy leads (used to
+    # reset activity metrics when a lead gets transferred to another agent).
+    await db.leads.update_many(
+        {"current_assignment_at": {"$exists": False}, "updated_at": {"$exists": True}},
+        [{"$set": {"current_assignment_at": "$updated_at"}}],
+    )
+
+    # Backfill completed_at + completed_by_user_id for existing Complete leads.
+    # completed_at ← updated_at as best-effort; completed_by_user_id ← most recent
+    # status_changed audit entry with new_value="Complete".
+    async for lead in db.leads.find(
+        {"lead_status": "Complete", "completed_at": {"$exists": False}},
+        {"_id": 1, "updated_at": 1},
+    ):
+        audit = await db.audit_logs.find_one(
+            {"entity_type": "lead", "entity_id": lead["_id"],
+             "action_type": "status_changed", "new_value": "Complete"},
+            sort=[("created_at", -1)],
+        )
+        set_fields = {"completed_at": lead.get("updated_at") or now_iso()}
+        if audit and audit.get("user_id"):
+            set_fields["completed_by_user_id"] = audit["user_id"]
+        await db.leads.update_one({"_id": lead["_id"]}, {"$set": set_fields})
 
     # Write test credentials
     try:

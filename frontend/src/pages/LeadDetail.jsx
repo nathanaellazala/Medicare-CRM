@@ -316,6 +316,27 @@ export default function LeadDetail() {
             <Field label="Medicare Parts" value={lead.medicare_parts}/>
           </div>
           <div className="border-t border-slate-100 pt-4 mt-4 space-y-2">
+            <div>
+              <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Effective Date</div>
+              <input
+                type="date"
+                value={lead.effective_date || ""}
+                onChange={(e) => updateField("effective_date", e.target.value || null)}
+                className="w-full text-sm text-slate-900 bg-white border border-slate-200 rounded px-2 py-1.5 hover:border-slate-300 focus:border-[#026AA2]"
+                data-testid="lead-effective-date"
+              />
+            </div>
+            {lead.lead_status === "Complete" && (
+              <div className="pt-2">
+                <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Completion</div>
+                <div className="text-sm text-slate-800" data-testid="lead-completed-info">
+                  {lead.completed_at ? new Date(lead.completed_at).toLocaleDateString() : "—"}
+                  {lead.completed_by_name && (
+                    <span className="text-slate-500"> · by <span className="text-slate-800 font-medium">{lead.completed_by_name}</span></span>
+                  )}
+                </div>
+              </div>
+            )}
             <Field label="Created" value={lead.created_at ? new Date(lead.created_at).toLocaleString() : ""}/>
             <Field label="Last Updated" value={lead.updated_at ? new Date(lead.updated_at).toLocaleString() : ""}/>
           </div>

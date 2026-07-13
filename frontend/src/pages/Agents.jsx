@@ -10,7 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { UserPlus, KeyRound, CheckCircle, Trophy, Circle, ShieldCheck, Pencil, Save } from "lucide-react";
+import { UserPlus, KeyRound, CheckCircle, Trophy, Circle, ShieldCheck, Pencil, Save, BarChart3 } from "lucide-react";
 
 export default function Agents() {
   const [agents, setAgents] = useState([]);
@@ -20,6 +20,9 @@ export default function Agents() {
   const [openPerms, setOpenPerms] = useState(null);
   const [permFields, setPermFields] = useState([]);
   const [permSelected, setPermSelected] = useState([]);
+  const [openHist, setOpenHist] = useState(null);
+  const [histData, setHistData] = useState(null);
+  const [histLoading, setHistLoading] = useState(false);
   const [form, setForm] = useState({ first_name: "", last_name: "", email: "", password: "" });
   const [resetPass, setResetPass] = useState("");
 
@@ -95,6 +98,19 @@ export default function Agents() {
 
   const selectAll = () => setPermSelected(permFields.map((f) => f.key));
   const selectNone = () => setPermSelected([]);
+
+  // ---- Activity history modal ----
+  const openHistory = async (a) => {
+    setOpenHist(a);
+    setHistData(null);
+    setHistLoading(true);
+    try {
+      const { data } = await api.get(`/users/${a.id}/activity-history`);
+      setHistData(data);
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setHistLoading(false); }
+  };
 
   const createAgent = async () => {
     try {
@@ -239,6 +255,14 @@ export default function Agents() {
                           data-testid={`edit-${a.id}`}
                         >
                           <Pencil size={12}/>
+                        </Button>
+                        <Button
+                          onClick={() => openHistory(a)}
+                          className="h-8 px-2 bg-white border border-slate-300 text-slate-700 hover:bg-sky-50 hover:text-[#026AA2] hover:border-[#026AA2]"
+                          title="Activity history (3 months)"
+                          data-testid={`history-${a.id}`}
+                        >
+                          <BarChart3 size={12}/>
                         </Button>
                         <Button
                           onClick={() => openPermissions(a)}
@@ -407,6 +431,86 @@ export default function Agents() {
             <Button onClick={savePermissions} className="text-white" style={{ background: "#026AA2" }} data-testid="perms-save">
               Save access
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ================ ACTIVITY HISTORY MODAL ================ */}
+      <Dialog open={!!openHist} onOpenChange={(o) => { if (!o) { setOpenHist(null); setHistData(null); } }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BarChart3 size={16} className="text-[#026AA2]"/>
+              Activity history — {openHist?.first_name} {openHist?.last_name}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-slate-500 -mt-1">
+            Rolling 3 months of tracked activity. <b>Minutes</b> comes from active-page heartbeats.
+          </p>
+
+          {histLoading && (
+            <div className="py-10 text-center text-sm text-slate-400">Loading activity…</div>
+          )}
+
+          {!histLoading && histData && (
+            <div className="space-y-6 max-h-[65vh] overflow-y-auto">
+              {/* Monthly summary */}
+              <div>
+                <h3 className="font-heading text-sm font-semibold text-slate-800 mb-2 uppercase tracking-wider">Monthly</h3>
+                <div className="grid grid-cols-3 gap-3">
+                  {histData.months.map((m) => (
+                    <div key={m.key} className="border border-slate-200 rounded-md p-3 bg-slate-50" data-testid={`hist-month-${m.key}`}>
+                      <div className="text-xs text-slate-500 uppercase tracking-wide">{m.label}</div>
+                      <div className="mt-1.5 flex items-baseline gap-1">
+                        <span className="text-lg font-semibold text-slate-900">{Math.floor(m.minutes / 60)}h</span>
+                        <span className="text-sm text-slate-600">{m.minutes % 60}m</span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-1.5 space-y-0.5">
+                        <div>{m.calls} calls · {m.notes} notes</div>
+                        <div>{m.appointments_set} appt · {m.completes} closed</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Weekly table */}
+              <div>
+                <h3 className="font-heading text-sm font-semibold text-slate-800 mb-2 uppercase tracking-wider">Last 12 weeks</h3>
+                <div className="border border-slate-200 rounded-md overflow-hidden">
+                  <table className="w-full crm-table">
+                    <thead>
+                      <tr className="text-left">
+                        <th className="px-3 py-2">Week</th>
+                        <th className="px-3 py-2 text-right">Time worked</th>
+                        <th className="px-3 py-2 text-right">Calls</th>
+                        <th className="px-3 py-2 text-right">Notes</th>
+                        <th className="px-3 py-2 text-right">Appts</th>
+                        <th className="px-3 py-2 text-right">Closed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...histData.weeks].reverse().map((w) => (
+                        <tr key={w.key} data-testid={`hist-week-${w.key}`}>
+                          <td className="px-3 py-2 text-xs text-slate-700">{w.label}</td>
+                          <td className="px-3 py-2 text-xs text-right text-slate-900 font-medium">
+                            {Math.floor(w.minutes / 60)}h {w.minutes % 60}m
+                          </td>
+                          <td className="px-3 py-2 text-xs text-right text-slate-700">{w.calls}</td>
+                          <td className="px-3 py-2 text-xs text-right text-slate-700">{w.notes}</td>
+                          <td className="px-3 py-2 text-xs text-right text-slate-700">{w.appointments_set}</td>
+                          <td className="px-3 py-2 text-xs text-right text-emerald-700 font-medium">{w.completes}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="mt-3">
+            <Button onClick={() => setOpenHist(null)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" data-testid="hist-close">Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
