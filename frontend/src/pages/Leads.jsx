@@ -168,6 +168,12 @@ export default function Leads() {
 
   const bulkAssign = async () => {
     if (!bulkAgent || selectedIds.length === 0) return;
+    const confirmed = window.confirm(
+      `Reassigning ${selectedIds.length} lead${selectedIds.length === 1 ? "" : "s"}.\n\n` +
+      "⚠️  This will PERMANENTLY DELETE all notes, call logs, and reset the status to Uncalled — the receiving agent gets a clean slate.\n\n" +
+      "Continue?"
+    );
+    if (!confirmed) return;
     try {
       await api.post("/leads/assign", { lead_ids: selectedIds, agent_id: bulkAgent });
       toast.success(`Assigned ${selectedIds.length} leads`);

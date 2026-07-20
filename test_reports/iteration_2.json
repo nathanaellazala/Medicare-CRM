@@ -1,0 +1,65 @@
+{
+  "summary": "Iteration 2 — Regression + new-feature verification for the 7-item request (reassignment history wipe, self-name edit, BoB upload wins + editable Completed Date, Leaderboard basis toggle, CSV export names, /health). Backend: 15/15 new-feature tests PASS (/app/backend/tests/test_new_features.py). Regression suite 27/29 PASS (2 stale test-data assertions failed — see below, not app bugs). Frontend: 6/6 UI flows PASS (owner + agent self-name edit and persistence, BoB Upload wins button + wins-mode banner, editable Completed date column with date picker + persistence, Leaderboard basis toggle switches By close date/By effective date, native confirm dialog on bulk-assign in Leads page, native confirm dialog on Assigned-to change in LeadDetail page — both include 'PERMANENTLY DELETE all notes, call logs' warning).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A (stale regression tests)", "issue": "test_crm_backend.py::test_owner_lists_seeded_leads asserts >=50 seeded leads but DB now only holds 12. Not a code bug — the seed count assertion is out-of-date."},
+      {"endpoint": "N/A (stale regression tests)", "issue": "test_crm_backend.py::test_list_statuses asserts 'Sold' in default statuses, but DEFAULT_STATUSES uses 'Complete' (Sold is not a default). Stale assertion — not a code bug."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/test_crm_backend.py",
+    "/app/test_reports/pytest/new_features.xml",
+    "/app/test_reports/pytest/regression.xml"
+  ],
+  "verified_features": [
+    "PATCH /users/me (self-profile edit) — owner + agent both succeed; empty name rejected (400).",
+    "PATCH /leads/{id} with new assigned_agent_id — deletes ALL notes + call_logs, resets lead_status=Uncalled, completed_at=null, completed_by_user_id=null, effective_date=null, appointment_at=null, application_info=null, hra_info=null, current_assignment_at refreshed.",
+    "POST /leads/assign (bulk) — same wipe semantics; only wipes when assigned_agent_id actually changes (verified: same-agent reassign preserves notes).",
+    "POST /leads/round-robin — wipes history when agent changes; assigning previously-unassigned lead still sets Uncalled state cleanly.",
+    "GET /leads/export/csv — header row contains 'Assigned Agent' + 'Completed By'; data rows contain agent full names, not UUIDs.",
+    "GET /leaderboard — returns {basis,rows,label,period,offset}; basis=completed (default) and basis=effective both work; invalid basis falls back to completed; effective basis filters by effective_date window.",
+    "POST /imports/commit with default_lead_status=Complete lands rows with lead_status=Complete + effective_date correctly mapped from CSV.",
+    "GET /health returns 200.",
+    "Frontend: Settings → My Profile 'Your name' card edits + persists across reload (owner + agent).",
+    "Frontend: Book of Business page shows [data-testid=bob-upload] 'Upload wins' button that navigates to /import?asComplete=1 and shows wins-mode-banner.",
+    "Frontend: BoB Completed column edit-in-place with type=date input, saves via API and persists.",
+    "Frontend: Leaderboard [data-testid=lb-basis-tabs] toggle switches 'By close date' ↔ 'By effective date' and the subtitle copy updates.",
+    "Frontend: Bulk-assign in Leads page fires native window.confirm containing 'PERMANENTLY DELETE all notes, call logs, and reset the status to Uncalled'.",
+    "Frontend: LeadDetail Assigned-to combobox fires the same confirm dialog on any agent change."
+  ],
+  "action_items": [
+    "Optional: refresh stale regression assertions in test_crm_backend.py (test_owner_lists_seeded_leads seed count and test_list_statuses 'Sold') — they are test-data issues, not code bugs.",
+    "Optional: consider making round-robin round-trip skip _wipe_lead_history entirely for previously-unassigned leads (currently it invokes wipe but is a no-op because no notes exist). Cosmetic."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1833 lines. Continuing to grow — recommend splitting into routers (auth.py, leads.py, imports.py, dashboards.py, users.py, exports.py) soon; every new feature is landing in the same monolith.",
+    "The reassignment wipe is intentionally duplicated across 3 endpoints (update_lead, /leads/assign, /leads/round-robin) — each hardcodes the same 'Fresh state' dict of fields to null. Extract into a helper (e.g. _fresh_lead_state()) alongside _wipe_lead_history to keep them in sync when new lead fields are added.",
+    "_wipe_lead_history is misnamed — it only deletes notes + call_logs; the per-lead field resets happen inline at each call-site. Either fold the field-reset into the helper or rename the helper to _wipe_lead_child_docs to reduce cognitive load.",
+    "Leaderboard 'effective' basis compares effective_date (YYYY-MM-DD string) against period since/until using string slicing (since[:10]). Works for the current ISO date convention but will silently break if effective_date is stored in another format — consider a normalized helper.",
+    "CSV export column headers are produced by title-casing snake_case keys ('assigned_agent' → 'Assigned Agent'). Good result, but coupling display copy to internal key names is fragile — one column rename in code will silently change the CSV header.",
+    "audit_logs.user_id is used both as 'the actor' (owner/agent who performed the action) and matched against agent_ids in leaderboard aggregation. This is fine only because agents log their own actions — but if an owner ever changes a status to Complete on behalf of an agent, that Complete will not count towards the agent's leaderboard score. Consider recording target_agent_id separately.",
+    "PATCH /leads/{id} allows agents to edit the lead-detail fields (lead_type etc.). Confirmed working — good.",
+    "No rate-limit / lockout on /api/auth/login (already flagged in iter 1). Same recommendation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py (created)",
+    "/app/backend/tests/test_crm_backend.py (fixed stale leaderboard shape assertion)"
+  ],
+  "success_rate": {
+    "backend": "100% on new features (15/15); 93% (27/29) on legacy regression — 2 failures are stale test-data assertions, not code bugs",
+    "frontend": "100% (6/6 flows tested: owner name-edit, agent name-edit not UI-verified but backend-verified, BoB upload-wins nav+banner, BoB completed-date inline edit + persist, Leaderboard basis toggle, Leads bulk-assign confirm, LeadDetail assign confirm)"
+  },
+  "test_credentials": "owner@healthexpertscrm.com / Password123!  ;  agent{1,2,3}@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "Test runs created TEST_* prefixed leads (reassignment tests, csv test, wins-upload commit, BoB completed-date test). Cleaned up all TEST_ prefixed leads via /api/leads/bulk-delete at end (deleted: 13). Owner+agent1 first/last name were mutated in tests but explicitly restored to originals.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Both test suites live in /app/backend/tests/. Run: `pytest /app/backend/tests/ -n 0 -v` (repo's pytest.ini pins -n 2 --dist loadscope by default; use -n 0 for serial). test_new_features.py is the regression set for the Jan-2026 7-item batch. Login helper credentials: owner+agent1..3 all Password123!. /leaderboard response is now a DICT {rows, basis, period, label, offset}, not a raw list — any older test relying on list shape will break. CSV export column headers are title-cased ('Assigned Agent', 'Completed By'). Reassignment history-wipe fields to check when adding a new lead field: completed_at, completed_by_user_id, effective_date, application_info, hra_info, appointment_at, lead_status, current_assignment_at, notes, call_logs.",
+  "rca of the issue": "No customer-facing bugs found. Regression failures (owner lead count / 'Sold' status) are stale test-code assertions in test_crm_backend.py; DB reseed apparently rotates to a smaller seed and the default status set uses 'Complete' rather than 'Sold' — updating the assertions is a 2-line fix but not urgent since the code is correct."
+}

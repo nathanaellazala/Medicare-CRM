@@ -275,12 +275,15 @@ class TestDashboards:
             assert k in cards
 
     def test_leaderboard(self, owner_client):
-        r = owner_client.get(f"{API}/leaderboard?range=week")
+        r = owner_client.get(f"{API}/leaderboard?period=week")
         assert r.status_code == 200
-        rows = r.json()
+        body = r.json()
+        assert isinstance(body, dict)
+        assert "rows" in body and "basis" in body
+        rows = body["rows"]
         assert isinstance(rows, list) and len(rows) >= 1
         first = rows[0]
-        for k in ["agent_id", "agent_name", "assigned", "calls", "appointments", "sold", "conversion_rate", "rank"]:
+        for k in ["agent_id", "agent_name", "assigned", "appointments", "sold", "conversion_rate", "rank"]:
             assert k in first
         # sorted by sold desc
         for a, b in zip(rows, rows[1:]):

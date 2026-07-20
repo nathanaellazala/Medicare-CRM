@@ -98,6 +98,16 @@ export default function LeadDetail() {
       setOpenAppt(true);
       return;
     }
+    // Reassignment warning — deletes all history for the receiving agent
+    if (field === "assigned_agent_id" && value !== lead?.assigned_agent_id) {
+      const newAgentName = value ? agentName(value) : "Unassigned";
+      const confirmed = window.confirm(
+        `Reassign this lead to ${newAgentName}?\n\n` +
+        "⚠️  This will PERMANENTLY DELETE all notes, call logs, and reset the status to Uncalled. The receiving agent will get the lead fresh, like new.\n\n" +
+        "Continue?"
+      );
+      if (!confirmed) return;
+    }
     try {
       const { data } = await api.patch(`/leads/${id}`, { [field]: value });
       setLead(data);

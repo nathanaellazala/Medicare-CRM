@@ -206,13 +206,11 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="profile">
+          <NameCard/>
+
           <Card className="p-6 border-slate-200 rounded-md shadow-sm mb-5">
-            <h2 className="font-heading text-base font-semibold text-slate-900 mb-4">My profile</h2>
+            <h2 className="font-heading text-base font-semibold text-slate-900 mb-4">Account details</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label className="text-xs">Name</Label>
-                <Input value={`${user?.first_name || ""} ${user?.last_name || ""}`} disabled className="mt-1.5"/>
-              </div>
               <div>
                 <Label className="text-xs">Email</Label>
                 <Input value={user?.email || ""} disabled className="mt-1.5"/>
@@ -232,6 +230,53 @@ export default function Settings() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function NameCard() {
+  const { user, refresh } = useAuth();
+  const [firstName, setFirstName] = useState(user?.first_name || "");
+  const [lastName, setLastName] = useState(user?.last_name || "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setFirstName(user?.first_name || "");
+    setLastName(user?.last_name || "");
+  }, [user?.first_name, user?.last_name]);
+
+  const submit = async () => {
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    if (!fn || !ln) return toast.error("First and last name are required");
+    setSaving(true);
+    try {
+      await api.patch("/users/me", { first_name: fn, last_name: ln });
+      await refresh();
+      toast.success("Name updated");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    } finally { setSaving(false); }
+  };
+
+  const dirty = firstName.trim() !== (user?.first_name || "") || lastName.trim() !== (user?.last_name || "");
+
+  return (
+    <Card className="p-6 border-slate-200 rounded-md shadow-sm mb-5">
+      <h2 className="font-heading text-base font-semibold text-slate-900 mb-4">Your name</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
+        <div>
+          <Label className="text-xs">First name</Label>
+          <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} className="mt-1.5" data-testid="my-first-name"/>
+        </div>
+        <div>
+          <Label className="text-xs">Last name</Label>
+          <Input value={lastName} onChange={(e) => setLastName(e.target.value)} className="mt-1.5" data-testid="my-last-name"/>
+        </div>
+      </div>
+      <Button onClick={submit} disabled={saving || !dirty} className="mt-5 text-white disabled:opacity-50" style={{ background: "#026AA2" }} data-testid="save-my-name">
+        {saving ? "Saving…" : "Save name"}
+      </Button>
+    </Card>
   );
 }
 

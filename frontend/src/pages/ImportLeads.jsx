@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, formatApiError } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Upload, FileSpreadsheet, ChevronRight, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Upload, FileSpreadsheet, ChevronRight, CheckCircle2, AlertTriangle, Award } from "lucide-react";
 import { toast } from "sonner";
 import { useEffect } from "react";
 
@@ -28,10 +28,13 @@ const TARGET_FIELDS = [
   { v: "medicare_number", l: "Medicare Number" },
   { v: "medicaid_provider", l: "Medicaid Provider / Plan" },
   { v: "medicare_parts", l: "Medicare Parts" },
+  { v: "effective_date", l: "Effective Date" },
 ];
 
 export default function ImportLeads() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const asComplete = params.get("asComplete") === "1";
   const [step, setStep] = useState(1); // 1 upload, 2 mapping, 3 result
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -68,7 +71,7 @@ export default function ImportLeads() {
   const commit = async () => {
     setBusy(true);
     try {
-      const { data } = await api.post("/imports/commit", {
+      const payload = {
         rows: preview.rows,
         mapping,
         duplicate_handling: duplicateHandling,
@@ -76,7 +79,9 @@ export default function ImportLeads() {
         agent_ids: agentIds,
         lead_type: leadType,
         file_name: preview.filename || "import.csv",
-      });
+      };
+      if (asComplete) payload.default_lead_status = "Complete";
+      const { data } = await api.post("/imports/commit", payload);
       setResult(data);
       setStep(3);
       toast.success(`Imported ${data.imported_rows} leads`);
@@ -88,9 +93,22 @@ export default function ImportLeads() {
     <div className="p-6 md:p-8 max-w-6xl mx-auto">
       <div className="mb-6">
         <div className="text-xs font-medium uppercase tracking-wider text-slate-500 mb-1.5">Import</div>
-        <h1 className="font-heading text-2xl font-semibold text-slate-900">Import Leads</h1>
-        <p className="text-sm text-slate-500 mt-1">Upload a CSV or Excel file. We'll auto-detect columns and dedupe.</p>
+        <h1 className="font-heading text-2xl font-semibold text-slate-900">
+          {asComplete ? "Import Completed Clients" : "Import Leads"}
+        </h1>
+        <p className="text-sm text-slate-500 mt-1">
+          {asComplete
+            ? "Upload historical wins into the Book of Business. Every row will be saved with status Complete — include an Effective Date column and it'll map automatically."
+            : "Upload a CSV or Excel file. We'll auto-detect columns and dedupe."}
+        </p>
       </div>
+
+      {asComplete && (
+        <div className="mb-5 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800" data-testid="wins-mode-banner">
+          <Award size={14}/>
+          <span>Wins upload mode — all imported rows will land in <b>Book of Business</b>.</span>
+        </div>
+      )}
 
       {/* Stepper */}
       <div className="flex items-center gap-3 mb-6 text-sm">

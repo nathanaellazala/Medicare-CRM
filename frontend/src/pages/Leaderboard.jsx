@@ -46,15 +46,16 @@ function Movement({ mv, change }) {
 export default function Leaderboard() {
   const [period, setPeriod] = useState("week");
   const [offset, setOffset] = useState(0);
+  const [basis, setBasis] = useState("completed"); // "completed" or "effective"
   const [data, setData] = useState({ rows: [], label: "" });
 
   useEffect(() => {
-    api.get("/leaderboard", { params: { period, offset } })
+    api.get("/leaderboard", { params: { period, offset, basis } })
       .then((r) => setData(r.data))
       .catch(() => setData({ rows: [], label: "" }));
-  }, [period, offset]);
+  }, [period, offset, basis]);
 
-  useEffect(() => { setOffset(0); }, [period]);
+  useEffect(() => { setOffset(0); }, [period, basis]);
 
   const top3 = data.rows.slice(0, 3);
   const rest = data.rows.slice(3);
@@ -70,9 +71,17 @@ export default function Leaderboard() {
           <h1 className="font-heading text-2xl font-semibold text-slate-900 flex items-center gap-2">
             Leaderboard <Flame size={22} className="text-orange-500"/>
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Ranked by sales. Compete, climb, close.</p>
+          <p className="text-sm text-slate-500 mt-1">
+            Ranked by {basis === "effective" ? "effective date" : "closed date"}. Compete, climb, close.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Tabs value={basis} onValueChange={setBasis}>
+            <TabsList className="bg-slate-100 h-9" data-testid="lb-basis-tabs">
+              <TabsTrigger value="completed" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="basis-completed">By close date</TabsTrigger>
+              <TabsTrigger value="effective" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="basis-effective">By effective date</TabsTrigger>
+            </TabsList>
+          </Tabs>
           <Tabs value={period} onValueChange={setPeriod}>
             <TabsList className="bg-slate-100 h-9" data-testid="lb-period-tabs">
               <TabsTrigger value="today" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="period-today">Daily</TabsTrigger>

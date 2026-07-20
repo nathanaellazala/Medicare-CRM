@@ -68,6 +68,18 @@ DEFAULT_STATUSES = [
 ]
 DEFAULT_STATUS_NAMES = {s["name"] for s in DEFAULT_STATUSES}
 
+
+async def _wipe_lead_history(lead_ids: List[str]):
+    """When a lead is reassigned to a different agent, wipe ALL history so the
+    receiving agent gets a completely fresh slate: delete notes and call logs,
+    reset status to "Uncalled", and clear completion metadata / effective date.
+    Audit trail (in audit_logs) is intentionally preserved.
+    """
+    if not lead_ids:
+        return
+    await db.notes.delete_many({"lead_id": {"$in": lead_ids}})
+    await db.call_logs.delete_many({"lead_id": {"$in": lead_ids}})
+
 CALL_RESULTS = [
     "No Answer", "Left Voicemail", "Spoke With Lead", "Not Interested",
     "Appointment Set", "Complete", "Wrong Number", "Disconnected",
@@ -313,6 +325,7 @@ class LeadUpdateIn(BaseModel):
     application_info: Optional[Dict[str, Any]] = None
     hra_info: Optional[Dict[str, Any]] = None
     effective_date: Optional[str] = None
+    completed_at: Optional[str] = None
 
 class NoteIn(BaseModel):
     note_text: str
@@ -350,6 +363,7 @@ class ImportCommitIn(BaseModel):
     agent_ids: List[str] = []
     file_name: str = "import.csv"
     lead_type: Literal["New to Medicare", "Transfer"] = "New to Medicare"
+    default_lead_status: Optional[str] = None
 
 # ============================================================================
 # Auth Endpoints
@@ -452,6 +466,34 @@ async def change_own_password(body: ChangePasswordIn, user: dict = Depends(get_c
     )
     await add_audit(user["_id"], "password_changed", "user", user["_id"])
     return {"ok": True}
+
+
+class SelfProfileIn(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+
+@api.patch("/users/me")
+async def update_own_profile(body: SelfProfileIn, user: dict = Depends(get_current_user)):
+    """Any user can update their own first/last name."""
+    updates: Dict[str, Any] = {}
+    if body.first_name is not None:
+        fn = body.first_name.strip()
+        if not fn:
+            raise HTTPException(400, "First name cannot be empty")
+        updates["first_name"] = fn
+    if body.last_name is not None:
+        ln = body.last_name.strip()
+        if not ln:
+            raise HTTPException(400, "Last name cannot be empty")
+        updates["last_name"] = ln
+    if not updates:
+        return clean_doc({k: v for k, v in user.items() if k != "password_hash"})
+    updates["updated_at"] = now_iso()
+    await db.users.update_one({"_id": user["_id"]}, {"$set": updates})
+    await add_audit(user["_id"], "profile_updated", "user", user["_id"])
+    fresh = await db.users.find_one({"_id": user["_id"]}, {"password_hash": 0})
+    return clean_doc(fresh)
 
 def _week_start_iso() -> str:
     now = datetime.now(timezone.utc)
@@ -790,9 +832,18 @@ async def update_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depends(get
             updates["completed_at"] = None
             updates["completed_by_user_id"] = None
 
-    # ------ Reassignment side-effect: reset activity clock ------
+    # ------ Reassignment side-effect: wipe history + reset activity clock ------
     if "assigned_agent_id" in updates and updates["assigned_agent_id"] != existing.get("assigned_agent_id"):
+        await _wipe_lead_history([lead_id])
+        # Force fresh state on the lead itself
         updates["current_assignment_at"] = now_iso()
+        updates["lead_status"] = "Uncalled"
+        updates["completed_at"] = None
+        updates["completed_by_user_id"] = None
+        updates["effective_date"] = None
+        updates["application_info"] = None
+        updates["hra_info"] = None
+        updates["appointment_at"] = None
 
     updates["updated_at"] = now_iso()
     await db.leads.update_one({"_id": lead_id}, {"$set": updates})
@@ -859,13 +910,26 @@ async def bulk_status(body: BulkStatusIn, user: dict = Depends(require_owner)):
 @api.post("/leads/assign")
 async def assign_leads(body: AssignIn, user: dict = Depends(require_owner)):
     now = now_iso()
+    # Only wipe history for leads whose assigned_agent_id is actually changing
+    changing_ids = [d["_id"] async for d in db.leads.find(
+        {"_id": {"$in": body.lead_ids}, "assigned_agent_id": {"$ne": body.agent_id}},
+        {"_id": 1},
+    )]
+    await _wipe_lead_history(changing_ids)
     res = await db.leads.update_many(
-        {"_id": {"$in": body.lead_ids}},
+        {"_id": {"$in": body.lead_ids}, "assigned_agent_id": {"$ne": body.agent_id}},
         {"$set": {
             "assigned_agent_id": body.agent_id,
             "updated_at": now,
-            # Reset per-lead activity clock so the new agent starts fresh
             "current_assignment_at": now,
+            # Fresh state
+            "lead_status": "Uncalled",
+            "completed_at": None,
+            "completed_by_user_id": None,
+            "effective_date": None,
+            "application_info": None,
+            "hra_info": None,
+            "appointment_at": None,
         }},
     )
     if body.lead_ids:
@@ -884,19 +948,38 @@ async def round_robin(body: RoundRobinIn, user: dict = Depends(require_owner)):
     if not lead_ids:
         return {"assigned": 0, "agents": len(body.agent_ids)}
     ts = now_iso()
+    # Wipe history for any lead whose assignment is actually changing to a different agent
+    existing_map = {d["_id"]: d.get("assigned_agent_id")
+                    async for d in db.leads.find({"_id": {"$in": lead_ids}}, {"assigned_agent_id": 1})}
+    changing_ids = []
     updates = []
     audits = []
     for i, lid in enumerate(lead_ids):
         agent = body.agent_ids[i % len(body.agent_ids)]
+        if existing_map.get(lid) != agent:
+            changing_ids.append(lid)
         updates.append(UpdateOne(
             {"_id": lid},
-            {"$set": {"assigned_agent_id": agent, "updated_at": ts, "current_assignment_at": ts}},
+            {"$set": {
+                "assigned_agent_id": agent,
+                "updated_at": ts,
+                "current_assignment_at": ts,
+                # Fresh state for the receiving agent (only meaningful when actually changing)
+                "lead_status": "Uncalled",
+                "completed_at": None,
+                "completed_by_user_id": None,
+                "effective_date": None,
+                "application_info": None,
+                "hra_info": None,
+                "appointment_at": None,
+            }},
         ))
         audits.append({
             "_id": str(uuid.uuid4()), "user_id": user["_id"],
             "action_type": "lead_assigned", "entity_type": "lead", "entity_id": lid,
-            "old_value": None, "new_value": agent, "created_at": ts,
+            "old_value": existing_map.get(lid), "new_value": agent, "created_at": ts,
         })
+    await _wipe_lead_history(changing_ids)
     await db.leads.bulk_write(updates, ordered=False)
     await db.audit_logs.insert_many(audits)
     return {"assigned": len(lead_ids), "agents": len(body.agent_ids)}
@@ -984,14 +1067,35 @@ async def export_csv(
             {"normalized_phone_number": {"$regex": normalize_phone(q) or "$^"}},
         ]
     items = await db.leads.find(f).to_list(20000)
+
+    # Build agent id → name lookup (for assigned_agent + completed_by columns)
+    id_set = {i.get("assigned_agent_id") for i in items if i.get("assigned_agent_id")}
+    id_set |= {i.get("completed_by_user_id") for i in items if i.get("completed_by_user_id")}
+    name_map = {}
+    if id_set:
+        async for u in db.users.find({"_id": {"$in": list(id_set)}}, {"first_name": 1, "last_name": 1}):
+            name_map[u["_id"]] = f"{u.get('first_name','').strip()} {u.get('last_name','').strip()}".strip() or "—"
+
     output = io.StringIO()
-    cols = ["full_name", "phone_number", "birthdate", "address", "city", "state", "zip_code",
-            "county", "medicaid_number", "medicare_number", "medicaid_provider",
-            "medicare_parts", "lead_status", "assigned_agent_id", "created_at", "updated_at"]
+    cols = [
+        "full_name", "phone_number", "birthdate", "address", "city", "state", "zip_code",
+        "county", "medicaid_number", "medicare_number", "medicaid_provider",
+        "medicare_parts", "lead_type", "lead_status",
+        "assigned_agent", "completed_by", "completed_at", "effective_date",
+        "created_at", "updated_at",
+    ]
     w = csv.writer(output)
-    w.writerow(cols)
+    w.writerow([c.replace("_", " ").title() for c in cols])
     for it in items:
-        w.writerow([it.get(c, "") for c in cols])
+        row = []
+        for c in cols:
+            if c == "assigned_agent":
+                row.append(name_map.get(it.get("assigned_agent_id"), "Unassigned"))
+            elif c == "completed_by":
+                row.append(name_map.get(it.get("completed_by_user_id"), ""))
+            else:
+                row.append(it.get(c, "") or "")
+        w.writerow(row)
     output.seek(0)
     return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=leads.csv"})
@@ -1104,6 +1208,8 @@ COL_ALIASES = {
     "lead type": "lead_type", "type": "lead_type", "transfer": "lead_type", "t/n": "lead_type",
     "dob": "birthdate",
     "status": "lead_status", "lead status": "lead_status", "state of lead": "lead_status",
+    "effective date": "effective_date", "effective": "effective_date", "coverage effective": "effective_date",
+    "start date": "effective_date", "policy effective": "effective_date",
 }
 
 def auto_map_columns(columns: List[str]) -> Dict[str, str]:
@@ -1216,11 +1322,14 @@ async def import_commit(body: ImportCommitIn, user: dict = Depends(require_owner
                 "medicaid_provider": str(mapped.get("medicaid_provider", "") or "").strip(),
                 "medicare_parts": str(mapped.get("medicare_parts", "") or "").strip(),
                 "lead_type": body.lead_type,
-                "lead_status": "Uncalled",
+                "lead_status": body.default_lead_status or "Uncalled",
                 "assigned_agent_id": None,
                 "source_import_batch_id": batch_id,
                 "is_duplicate": False,
                 "duplicate_group_id": None,
+                "effective_date": (str(mapped.get("effective_date", "") or "").strip() or None),
+                "completed_at": (now_iso() if body.default_lead_status == "Complete" else None),
+                "completed_by_user_id": (user["_id"] if body.default_lead_status == "Complete" else None),
                 "created_at": now_iso(),
                 "updated_at": now_iso(),
             }
@@ -1428,7 +1537,18 @@ def _period_range(period: str, month_offset: int = 0):
     return start.isoformat(), end.isoformat(), label
 
 
-async def _leaderboard_rows(period: str, offset: int):
+async def _leaderboard_rows(period: str, offset: int, basis: str = "completed"):
+    """Compute rows ranked by completed wins.
+
+    basis:
+      - "completed"  → counts a win when lead_status transitions to Complete
+                       within the period (from audit_logs.created_at, falls
+                       back to leads.completed_at).
+      - "effective"  → counts a win when the lead's effective_date is within
+                       the period. Useful for insurance where the sale is
+                       recognised on the coverage effective date, not the day
+                       it was closed.
+    """
     since, until, label = _period_range(period, offset)
     agents = await db.users.find({"role": "agent", "on_leaderboard": {"$ne": False}}).to_list(200)
     if not agents:
@@ -1466,14 +1586,33 @@ async def _leaderboard_rows(period: str, offset: int):
     ]):
         last_call_map[g["_id"]] = g["last"]
 
+    # For basis="effective", count leads whose effective_date is in the window
+    since_date = since[:10]  # ISO date YYYY-MM-DD comparable to effective_date strings
+    until_date = until[:10]
+    effective_agg = {}
+    if basis == "effective":
+        async for g in db.leads.aggregate([
+            {"$match": {
+                "assigned_agent_id": {"$in": agent_ids},
+                "lead_status": "Complete",
+                "effective_date": {"$gte": since_date, "$lt": until_date},
+            }},
+            {"$group": {"_id": "$assigned_agent_id", "count": {"$sum": 1}}},
+        ]):
+            effective_agg[g["_id"]] = g["count"]
+
     rows = []
     for a in agents:
         aid = a["_id"]
-        sold = audit_agg.get((aid, "Complete"), 0)
+        if basis == "effective":
+            sold = effective_agg.get(aid, 0)
+        else:
+            sold = audit_agg.get((aid, "Complete"), 0)
+            # Fallback: if no audit rows in this period, use current lead counts (works for seeded data)
+            if sold == 0 and audit_agg.get((aid, "Appointment Set"), 0) == 0:
+                sold = lead_status_agg.get((aid, "Complete"), 0)
         appts = audit_agg.get((aid, "Appointment Set"), 0)
-        # Fallback: if no audit rows in this period, use current lead counts (works for seeded data)
-        if sold == 0 and appts == 0:
-            sold = lead_status_agg.get((aid, "Complete"), 0)
+        if basis == "completed" and appts == 0 and sold == lead_status_agg.get((aid, "Complete"), 0):
             appts = lead_status_agg.get((aid, "Appointment Set"), 0)
         assigned = lead_assigned_agg.get(aid, 0)
         rows.append({
@@ -1493,11 +1632,12 @@ async def _leaderboard_rows(period: str, offset: int):
 
 
 @api.get("/leaderboard")
-async def leaderboard(user: dict = Depends(get_current_user), period: str = "week", offset: int = 0):
+async def leaderboard(user: dict = Depends(get_current_user), period: str = "week", offset: int = 0, basis: str = "completed"):
     period = period if period in ("today", "week", "month") else "week"
-    current, label = await _leaderboard_rows(period, offset)
+    basis = basis if basis in ("completed", "effective") else "completed"
+    current, label = await _leaderboard_rows(period, offset, basis)
     # previous period for movement arrows
-    prev, prev_label = await _leaderboard_rows(period, offset + 1)
+    prev, _ = await _leaderboard_rows(period, offset + 1, basis)
     prev_rank = {r["agent_id"]: r["rank"] for r in prev}
     for r in current:
         pr = prev_rank.get(r["agent_id"])
@@ -1512,7 +1652,7 @@ async def leaderboard(user: dict = Depends(get_current_user), period: str = "wee
                 r["movement"] = "down"
             else:
                 r["movement"] = "same"
-    return {"period": period, "offset": offset, "label": label, "rows": current}
+    return {"period": period, "offset": offset, "basis": basis, "label": label, "rows": current}
 
 # ============================================================================
 # Company settings

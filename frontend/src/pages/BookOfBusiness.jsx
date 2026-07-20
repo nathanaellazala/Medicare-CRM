@@ -4,7 +4,7 @@ import { api, formatApiError, formatBirthdate } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, Search, ChevronRight, Download, Award, Calendar as CalIcon, User as UserIcon, Pencil } from "lucide-react";
+import { CheckCircle2, Search, ChevronRight, Download, Upload, Award, Calendar as CalIcon, User as UserIcon, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 function formatDateShort(iso) {
@@ -23,7 +23,9 @@ export default function BookOfBusiness() {
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
   const [editingEffective, setEditingEffective] = useState(null); // lead id
+  const [editingCompleted, setEditingCompleted] = useState(null); // lead id
   const [effectiveDraft, setEffectiveDraft] = useState("");
+  const [completedDraft, setCompletedDraft] = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -61,6 +63,28 @@ export default function BookOfBusiness() {
     }
   };
 
+  const startEditCompleted = (e, lead) => {
+    e.stopPropagation();
+    setEditingCompleted(lead.id);
+    // pre-fill in YYYY-MM-DD form (HTML date input format)
+    const iso = lead.completed_at || lead.updated_at || "";
+    setCompletedDraft(iso ? iso.slice(0, 10) : "");
+  };
+
+  const saveCompletedDate = async (leadId) => {
+    try {
+      // Keep the time part of the original stamp when possible; otherwise noon UTC
+      const dateOnly = completedDraft;
+      const iso = dateOnly ? `${dateOnly}T12:00:00+00:00` : null;
+      await api.patch(`/leads/${leadId}`, { completed_at: iso });
+      toast.success("Completed date saved");
+      setEditingCompleted(null);
+      load();
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    }
+  };
+
   return (
     <div className="p-6 md:p-8">
       <div className="flex items-end justify-between mb-5 flex-wrap gap-3">
@@ -74,13 +98,23 @@ export default function BookOfBusiness() {
           </p>
         </div>
         {isOwner && (
-          <Button
-            onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/leads/export/csv?status=Complete`, "_blank")}
-            className="h-9 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
-            data-testid="bob-export"
-          >
-            <Download size={14} className="mr-1.5" /> Export CSV
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              onClick={() => navigate("/import?asComplete=1")}
+              className="h-9 text-white"
+              style={{ background: "#026AA2" }}
+              data-testid="bob-upload"
+            >
+              <Upload size={14} className="mr-1.5" /> Upload wins
+            </Button>
+            <Button
+              onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/leads/export/csv?status=Complete`, "_blank")}
+              className="h-9 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
+              data-testid="bob-export"
+            >
+              <Download size={14} className="mr-1.5" /> Export CSV
+            </Button>
+          </div>
         )}
       </div>
 
@@ -183,8 +217,38 @@ export default function BookOfBusiness() {
                       </button>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-xs text-slate-600" data-testid={`bob-completed-${lead.id}`}>
-                    {formatDateShort(lead.completed_at || lead.updated_at)}
+                  <td className="px-4 py-3 text-xs text-slate-600" onClick={(e) => e.stopPropagation()} data-testid={`bob-completed-${lead.id}`}>
+                    {editingCompleted === lead.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="date"
+                          value={completedDraft}
+                          onChange={(e) => setCompletedDraft(e.target.value)}
+                          className="h-7 text-xs w-36"
+                          autoFocus
+                          data-testid={`comp-input-${lead.id}`}
+                        />
+                        <Button
+                          onClick={() => saveCompletedDate(lead.id)}
+                          className="h-7 px-2 text-xs text-white"
+                          style={{ background: "#026AA2" }}
+                          data-testid={`comp-save-${lead.id}`}
+                        >Save</Button>
+                        <button
+                          onClick={() => setEditingCompleted(null)}
+                          className="text-xs text-slate-500 hover:text-slate-800"
+                        >Cancel</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => startEditCompleted(e, lead)}
+                        className="inline-flex items-center gap-1.5 text-slate-700 hover:text-[#026AA2] hover:underline"
+                        data-testid={`comp-edit-${lead.id}`}
+                      >
+                        {formatDateShort(lead.completed_at || lead.updated_at)}
+                        <Pencil size={10} className="text-slate-400"/>
+                      </button>
+                    )}
                   </td>
                   {isOwner && (
                     <td className="px-4 py-3 text-sm text-slate-700" data-testid={`bob-cb-${lead.id}`}>
