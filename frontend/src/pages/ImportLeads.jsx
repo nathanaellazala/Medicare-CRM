@@ -104,9 +104,14 @@ export default function ImportLeads() {
       </div>
 
       {asComplete && (
-        <div className="mb-5 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800" data-testid="wins-mode-banner">
-          <Award size={14}/>
-          <span>Wins upload mode — all imported rows will land in <b>Book of Business</b>.</span>
+        <div className="mb-5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800 space-y-1" data-testid="wins-mode-banner">
+          <div className="flex items-center gap-2 font-medium">
+            <Award size={14}/>
+            Wins upload mode — all imported rows will land in <b>Book of Business</b>.
+          </div>
+          <div className="text-[12px] text-emerald-700/90 pl-6">
+            📅 Include an <b>Effective Date</b> column in your sheet (accepted headers: <i>Effective Date, Effective, Coverage Effective, Policy Effective, Start Date</i>) — it will be auto-mapped and stored per client.
+          </div>
         </div>
       )}
 

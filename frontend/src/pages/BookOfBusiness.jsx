@@ -1,15 +1,24 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, formatApiError, formatBirthdate } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, Search, ChevronRight, Download, Upload, Award, Calendar as CalIcon, User as UserIcon, Pencil } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { CheckCircle2, Search, ChevronRight, Download, Upload, Award, Calendar as CalIcon, User as UserIcon, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 function formatDateShort(iso) {
   if (!iso) return "—";
-  const d = new Date(iso);
+  // For YYYY-MM-DD strings (like effective_date), interpret in LOCAL time to
+  // avoid the classic "picked Jul 1, displays as Jun 30" UTC-shift bug.
+  const dateOnly = typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso);
+  const d = dateOnly
+    ? (() => {
+        const [y, m, day] = iso.split("-").map(Number);
+        return new Date(y, m - 1, day);
+      })()
+    : new Date(iso);
   if (isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
@@ -26,6 +35,35 @@ export default function BookOfBusiness() {
   const [editingCompleted, setEditingCompleted] = useState(null); // lead id
   const [effectiveDraft, setEffectiveDraft] = useState("");
   const [completedDraft, setCompletedDraft] = useState("");
+  const [selected, setSelected] = useState({}); // { [leadId]: true }
+
+  const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
+  const allSelected = items.length > 0 && items.every((l) => selected[l.id]);
+  const toggleOne = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }));
+  const toggleAll = () => {
+    if (allSelected) setSelected({});
+    else {
+      const next = {};
+      items.forEach((l) => { next[l.id] = true; });
+      setSelected(next);
+    }
+  };
+  const clearSelection = () => setSelected({});
+
+  const bulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const confirmed = window.confirm(
+      `Permanently delete ${selectedIds.length} completed client${selectedIds.length === 1 ? "" : "s"} from the Book of Business?\n\n` +
+      "This cannot be undone."
+    );
+    if (!confirmed) return;
+    try {
+      const { data } = await api.post("/leads/bulk-delete", { lead_ids: selectedIds });
+      toast.success(`Deleted ${data.deleted ?? selectedIds.length} client${selectedIds.length === 1 ? "" : "s"}`);
+      clearSelection();
+      load();
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -118,9 +156,9 @@ export default function BookOfBusiness() {
         )}
       </div>
 
-      {/* Search */}
-      <div className="bg-white border border-slate-200 rounded-md p-3 mb-4">
-        <div className="relative">
+      {/* Search + bulk-action bar */}
+      <div className="bg-white border border-slate-200 rounded-md p-3 mb-4 flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 min-w-[240px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <Input
             value={q}
@@ -130,6 +168,27 @@ export default function BookOfBusiness() {
             data-testid="bob-search"
           />
         </div>
+        {isOwner && selectedIds.length > 0 && (
+          <div className="flex items-center gap-2" data-testid="bob-bulk-bar">
+            <span className="text-xs text-slate-600 font-medium">
+              {selectedIds.length} selected
+            </span>
+            <Button
+              onClick={bulkDelete}
+              className="h-8 bg-red-50 border border-red-200 text-red-700 hover:bg-red-100"
+              data-testid="bob-bulk-delete"
+            >
+              <Trash2 size={13} className="mr-1.5"/> Delete
+            </Button>
+            <Button
+              onClick={clearSelection}
+              className="h-8 bg-white border border-slate-300 text-slate-600 hover:bg-slate-50"
+              data-testid="bob-clear-selection"
+            >
+              Clear
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -138,6 +197,16 @@ export default function BookOfBusiness() {
           <table className="w-full crm-table">
             <thead>
               <tr className="text-left">
+                {isOwner && (
+                  <th className="px-3 py-3 w-8">
+                    <Checkbox
+                      checked={allSelected}
+                      onCheckedChange={toggleAll}
+                      data-testid="bob-select-all"
+                      aria-label="Select all"
+                    />
+                  </th>
+                )}
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Phone</th>
                 <th className="px-4 py-3">Birthdate</th>
@@ -159,11 +228,11 @@ export default function BookOfBusiness() {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={isOwner ? 9 : 8} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
+                <tr><td colSpan={isOwner ? 10 : 8} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
               )}
               {!loading && items.length === 0 && (
                 <tr>
-                  <td colSpan={isOwner ? 9 : 8} className="text-center py-14 text-slate-400">
+                  <td colSpan={isOwner ? 10 : 8} className="text-center py-14 text-slate-400">
                     <CheckCircle2 size={28} className="mx-auto mb-2 text-slate-300"/>
                     <div className="text-sm font-medium text-slate-600">No completed clients yet.</div>
                     <div className="text-xs">Mark a lead as Complete to see it here.</div>
@@ -175,6 +244,16 @@ export default function BookOfBusiness() {
                     className="cursor-pointer"
                     data-testid={`bob-row-${lead.id}`}
                     onClick={() => navigate(`/leads/${lead.id}`)}>
+                  {isOwner && (
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={!!selected[lead.id]}
+                        onCheckedChange={() => toggleOne(lead.id)}
+                        data-testid={`bob-select-${lead.id}`}
+                        aria-label={`Select ${lead.full_name}`}
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <div className="font-medium text-slate-900 text-sm flex items-center gap-2">
                       <CheckCircle2 size={13} className="text-emerald-500"/> {lead.full_name || "—"}

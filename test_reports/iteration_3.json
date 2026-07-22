@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 3 focused on the 3 requested items: (1) timezone bug on Effective Date, (2) bulk-delete on Book of Business, (3) Effective Date auto-map on Wins upload. All PASS. Backend: 15/15 pytest cases green in /app/backend/tests/test_iter3_features.py. Frontend: verified live at https://medicare-agent-desk.preview.emergentagent.com — Jul 1 / Jan 1 / Mar 1 2026 dates set on BoB display and persist across page reload (no more Jun 30 shift); bulk-delete UI (select-one -> bulk-bar visible with Delete + Clear, select-all works, native confirm accepted -> POST /leads/bulk-delete deletes rows and they disappear); wins-mode-banner contains all five accepted header names; agent1 view has NO select-all, NO row checkboxes, NO Upload wins/Export buttons.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_iter3_features.py",
+    "/app/test_reports/pytest/iter3.xml"
+  ],
+  "verified_features": [
+    "PATCH /leads/{id} {effective_date: '2026-07-01'} -> response + subsequent GET return exact '2026-07-01' (parametrized for 2026-01-01, 2026-03-01, 2026-12-31 as well). No UTC shift.",
+    "Setting effective_date=null via PATCH clears the field.",
+    "POST /leads/bulk-delete {lead_ids:[a,b,c]} returns {deleted:3}; GET each id => 404. Empty list rejected with 400. Agent (non-owner) rejected with 401/403.",
+    "/imports/preview auto_mapping recognises: 'Effective Date', 'Effective', 'Coverage Effective', 'Policy Effective', 'Start Date', case-insensitive 'effective date'. All -> effective_date.",
+    "/imports/commit with default_lead_status=Complete lands the row with lead_status=Complete AND effective_date exactly '2026-08-15' (no shifting). Row surfaces in GET /leads?status=Complete.",
+    "BoB UI: pencil-edit Effective column -> type=date input -> Save -> row displays 'Jul 1, 2026' immediately AND after full page reload. Repeated for 2026-01-01 and 2026-03-01 — all display correctly.",
+    "BoB UI: bulk-bar (data-testid='bob-bulk-bar') is hidden with 0 selected; appears after selecting any row; contains Delete (bob-bulk-delete) and Clear (bob-clear-selection) buttons.",
+    "BoB UI: 'Select all' (bob-select-all) toggles every row.",
+    "BoB UI: clicking Delete + accepting the native confirm triggers POST /leads/bulk-delete, row disappears, toast shown.",
+    "BoB UI (agent1 / non-owner): NO select-all, NO row checkboxes (bob-select-*), NO Upload wins button, NO Export CSV button — verified visually and via query_selector.",
+    "Wins mode banner (data-testid='wins-mode-banner') contains copy referencing all five accepted headers: 'Effective Date, Effective, Coverage Effective, Policy Effective, Start Date'."
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py continues to grow (~1834 lines). Same recommendation as iter 2: split into routers (leads, imports, dashboards, users, exports, auth).",
+    "PATCH /leads/{id} accepts effective_date as a free-form string; server does not validate the YYYY-MM-DD shape server-side (Pydantic type is Optional[str]). If a client ever sends 'July 1, 2026' or an ISO datetime, formatDateShort will still try to render, but the leaderboard 'effective' basis (which does since[:10] string slicing) may silently miss the row. Consider adding a regex/date-format validator on the Pydantic model, e.g. `field_validator` that enforces ^\\d{4}-\\d{2}-\\d{2}$ or None.",
+    "The client-side timezone fix in BookOfBusiness.formatDateShort() is duplicated logic — the same fix is needed anywhere the app renders effective_date. Consider promoting this helper to a shared utility (/lib/date.js) so LeadDetail, Leaderboard, Reports, CSV preview etc. all format YYYY-MM-DD consistently as local, not UTC.",
+    "/leads/bulk-delete uses a raw dict body (no Pydantic model). Consider adding `class BulkDeleteIn(BaseModel): lead_ids: List[str]` for consistency with BulkStatusIn/AssignIn and to reject malformed payloads before hitting Mongo.",
+    "Import row skipping is silent: rows are dropped when phone AND name are all empty, but there is no per-row error info returned. For debugging user upload issues consider adding a `skipped_rows_reasons` (or at least first-N samples) to the ImportBatch response.",
+    "COL_ALIASES uses lower-cased space-normalised keys. Header 'first_name' (with underscore) is NOT auto-mapped — only 'First Name' with space is. If users export from another CRM in snake_case, they'll have to remap every column. Consider adding aliases with underscores: 'first_name', 'last_name', 'phone_number', 'zip_code'.",
+    "Confirm dialog in bulkDelete uses window.confirm — good for owner safety, but consider a shadcn AlertDialog for consistency with the rest of the UI (bulk-assign uses window.confirm too, so this is an app-wide style choice)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3_features.py (created — 15 tests covering all 3 items)"
+  ],
+  "success_rate": { "backend": "100% (15/15)", "frontend": "100% (all target flows verified end-to-end)" },
+  "test_credentials": "owner@healthexpertscrm.com / Password123!  ;  agent1@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "One TEST_TZ lead was created + marked Complete for the UI timezone/bulk-delete flow, then deleted via the UI bulk-delete action. TEST_ prefixed leads created by pytest are cleaned up in-test (owner_client.delete + bulk-delete calls in fixtures).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "New reusable test module: /app/backend/tests/test_iter3_features.py — parametrizes 4 dates for the timezone round-trip. If CSV templates change in future, note that /imports/preview auto-maps by matching header text against COL_ALIASES (server.py ~L1195): headers must be space-separated ('First Name', not 'first_name'). Agent view of /book-of-business intentionally hides ALL owner-only affordances (Upload wins, Export CSV, checkboxes, bulk-bar) — see BookOfBusiness.jsx isOwner gate. Frontend uses localStorage for the JWT (not httpOnly cookie), so clearing context cookies alone will NOT log the user out — must also localStorage.clear(). App redirects agents to /my-leads after login (not /dashboard).",
+  "rca of the issue": "Original 7/1 -> 6/30 bug root cause: `new Date('2026-07-01')` in JavaScript is interpreted as UTC midnight; when the browser is in America/New_York (UTC-4/-5), rendering with toLocaleDateString() shifts it back a day to Jun 30. Fix applied in /app/frontend/src/pages/BookOfBusiness.jsx formatDateShort(): detect the YYYY-MM-DD shape, split into [y,m,d] integers, and construct `new Date(y, m-1, d)` which creates a LOCAL-midnight Date so toLocaleDateString returns the intended calendar date. Backend already stored effective_date as an opaque YYYY-MM-DD string (no Date parsing), so no server change was needed — round-trip test in test_iter3_features.py confirms exact preservation. NOTE FOR MAIN AGENT: this fix is currently only in BoB. If effective_date is ever rendered elsewhere with `new Date(iso)` (e.g. LeadDetail, CSV preview components, Reports), the same UTC-shift will reproduce. Recommend extracting formatDateShort() to a shared /lib/date.js utility."
+}
