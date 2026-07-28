@@ -5,7 +5,8 @@ import { api } from "@/lib/api";
 import {
   LayoutDashboard, Users, Upload, UserCog, Shuffle, Copy,
   Trophy, BarChart3, Settings, LogOut, Search, Bell, Briefcase,
-  ChevronDown, BookOpen, Sparkles, Clock, Calendar as CalendarIcon
+  ChevronDown, BookOpen, Sparkles, Clock, Calendar as CalendarIcon,
+  Radio
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,6 +21,7 @@ const ownerNav = [
   { to: "/import", icon: Upload, label: "Import Leads" },
   { to: "/agents", icon: UserCog, label: "Agents" },
   { to: "/assign", icon: Shuffle, label: "Assign Leads" },
+  { to: "/shared-leads", icon: Radio, label: "Shared Leads" },
   { to: "/appointments", icon: CalendarIcon, label: "Appointments" },
   { to: "/duplicates", icon: Copy, label: "Duplicates" },
   { to: "/book-of-business", icon: BookOpen, label: "Book of Business" },
@@ -31,6 +33,7 @@ const ownerNav = [
 const agentNav = [
   { to: "/my-leads", icon: Users, label: "My Leads" },
   { to: "/dashboard", icon: LayoutDashboard, label: "My Dashboard" },
+  { to: "/shared-leads", icon: Radio, label: "Shared Leads" },
   { to: "/appointments", icon: CalendarIcon, label: "Appointments" },
   { to: "/book-of-business", icon: BookOpen, label: "Book of Business" },
   { to: "/leaderboard", icon: Trophy, label: "Leaderboard" },

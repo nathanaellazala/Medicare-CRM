@@ -9,7 +9,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import StatusBadge from "@/components/StatusBadge";
-import { Search, Filter, Download, Shuffle, ChevronRight, RefreshCw, Trash2 } from "lucide-react";
+import { Search, Filter, Download, Shuffle, ChevronRight, RefreshCw, Trash2, Radio } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter
@@ -182,12 +182,41 @@ export default function Leads() {
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
-  const quickStatus = async (id, newStatus) => {
+  const bulkMoveShared = async () => {
+    if (selectedIds.length === 0) return;
+    const confirmed = window.confirm(
+      `Move ${selectedIds.length} lead${selectedIds.length === 1 ? "" : "s"} to the shared pool?\n\n` +
+      "⚠️  Notes, call logs, and status will be reset — any agent will then be able to claim these leads.\n\n" +
+      "Continue?"
+    );
+    if (!confirmed) return;
     try {
-      await api.patch(`/leads/${id}`, { lead_status: newStatus });
-      toast.success("Status updated");
+      const { data } = await api.post("/shared-leads/move", { lead_ids: selectedIds });
+      toast.success(`${data.moved} lead${data.moved === 1 ? "" : "s"} moved to shared pool`);
+      setSelected({});
       load();
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const quickStatus = async (id, newStatus) => {
+    // Optimistic local update — no full reload, so the agent stays in the
+    // same scroll position and their filter/sort state is preserved.
+    try {
+      const { data: updated } = await api.patch(`/leads/${id}`, { lead_status: newStatus });
+      setItems((prev) => {
+        // If the user is not filtering explicitly by "Complete", drop the row
+        // once it turns Complete (it now lives in Book of Business).
+        if (newStatus === "Complete" && status !== "Complete") {
+          const next = prev.filter((l) => l.id !== id);
+          setTotal(next.length);
+          return next;
+        }
+        return prev.map((l) => (l.id === id ? { ...l, ...updated } : l));
+      });
+      toast.success("Status updated");
+    } catch (e) {
+      toast.error(formatApiError(e.response?.data?.detail));
+    }
   };
 
   return (
@@ -310,6 +339,14 @@ export default function Leads() {
               </SelectContent>
             </Select>
             <Button onClick={bulkAssign} className="h-8 text-white" style={{ background: "#026AA2" }} data-testid="bulk-apply-assign">Assign</Button>
+            <Button
+              onClick={bulkMoveShared}
+              className="h-8 bg-white border border-[#026AA2] text-[#026AA2] hover:bg-sky-50"
+              data-testid="bulk-move-shared"
+              title="Move selected leads into the shared pool — any agent can claim them"
+            >
+              <Radio size={12} className="mr-1"/> To shared pool
+            </Button>
             <Button onClick={bulkDelete} className="h-8 bg-red-600 hover:bg-red-700 text-white" data-testid="bulk-delete">
               <Trash2 size={12} className="mr-1"/> Delete
             </Button>

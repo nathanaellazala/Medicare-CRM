@@ -326,6 +326,7 @@ class LeadUpdateIn(BaseModel):
     hra_info: Optional[Dict[str, Any]] = None
     effective_date: Optional[str] = None
     completed_at: Optional[str] = None
+    is_shared: Optional[bool] = None
 
 class NoteIn(BaseModel):
     note_text: str
@@ -696,7 +697,9 @@ async def delete_status(sid: str, user: dict = Depends(require_owner)):
 def lead_scope_filter(user: dict) -> dict:
     if user["role"] == "owner":
         return {}
-    return {"assigned_agent_id": user["_id"]}
+    # Agents see leads assigned to them; shared-pool leads are surfaced via
+    # the dedicated /leads/shared endpoints so they don't clutter My Leads.
+    return {"assigned_agent_id": user["_id"], "is_shared": {"$ne": True}}
 
 @api.get("/leads")
 async def list_leads(
@@ -709,11 +712,17 @@ async def list_leads(
     medicare_parts: Optional[str] = None,
     medicaid_provider: Optional[str] = None,
     lead_type: Optional[str] = None,
+    effective_from: Optional[str] = None,
+    effective_to: Optional[str] = None,
+    include_shared: bool = False,
     sort: str = "updated_desc",
     limit: int = 200,
     skip: int = 0,
 ):
     f = lead_scope_filter(user)
+    if user["role"] == "owner" and not include_shared:
+        # Owner's default leads view: hide the shared pool (it has its own page)
+        f["is_shared"] = {"$ne": True}
     if status: f["lead_status"] = status
     if agent_id and user["role"] == "owner":
         f["assigned_agent_id"] = None if agent_id == "unassigned" else agent_id
@@ -722,6 +731,11 @@ async def list_leads(
     if medicare_parts: f["medicare_parts"] = {"$regex": re.escape(medicare_parts), "$options": "i"}
     if medicaid_provider: f["medicaid_provider"] = {"$regex": re.escape(medicaid_provider), "$options": "i"}
     if lead_type: f["lead_type"] = lead_type
+    if effective_from or effective_to:
+        ed = {}
+        if effective_from: ed["$gte"] = effective_from
+        if effective_to:   ed["$lte"] = effective_to
+        f["effective_date"] = ed
     if q:
         normalized = normalize_phone(q)
         or_clauses = [
@@ -994,6 +1008,233 @@ async def bulk_delete_leads(body: dict, user: dict = Depends(require_owner)):
     await db.call_logs.delete_many({"lead_id": {"$in": ids}})
     await db.audit_logs.insert_many(_audit_docs(user["_id"], "lead_deleted", ids))
     return {"deleted": res.deleted_count}
+
+
+# ============================================================================
+# Shared lead pool — all agents can see; one agent at a time can open one
+# ============================================================================
+SHARED_LOCK_TTL_SECONDS = 5 * 60  # 5 minutes
+
+
+def _lock_is_active(locked_at_iso: Optional[str]) -> bool:
+    if not locked_at_iso:
+        return False
+    try:
+        dt = datetime.fromisoformat(locked_at_iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return False
+    age = (datetime.now(timezone.utc) - dt).total_seconds()
+    return age < SHARED_LOCK_TTL_SECONDS
+
+
+class SharedMoveIn(BaseModel):
+    lead_ids: List[str]
+
+
+@api.post("/shared-leads/move")
+async def move_to_shared_pool(body: SharedMoveIn, user: dict = Depends(require_owner)):
+    """Owner moves leads into the shared pool. Wipes history like a normal
+    reassignment (fresh slate for whichever agent claims it)."""
+    if not body.lead_ids:
+        raise HTTPException(400, "lead_ids required")
+    await _wipe_lead_history(body.lead_ids)
+    now = now_iso()
+    await db.leads.update_many(
+        {"_id": {"$in": body.lead_ids}},
+        {"$set": {
+            "is_shared": True,
+            "assigned_agent_id": None,
+            "locked_by_user_id": None,
+            "locked_at": None,
+            "current_assignment_at": now,
+            "lead_status": "Uncalled",
+            "completed_at": None,
+            "completed_by_user_id": None,
+            "effective_date": None,
+            "application_info": None,
+            "hra_info": None,
+            "appointment_at": None,
+            "updated_at": now,
+        }},
+    )
+    await db.audit_logs.insert_many(_audit_docs(user["_id"], "moved_to_shared", body.lead_ids))
+    return {"moved": len(body.lead_ids)}
+
+
+@api.post("/shared-leads/remove")
+async def remove_from_shared_pool(body: SharedMoveIn, user: dict = Depends(require_owner)):
+    """Owner takes leads back out of the shared pool (unassigned by default)."""
+    if not body.lead_ids:
+        raise HTTPException(400, "lead_ids required")
+    await db.leads.update_many(
+        {"_id": {"$in": body.lead_ids}},
+        {"$set": {"is_shared": False, "locked_by_user_id": None, "locked_at": None, "updated_at": now_iso()}},
+    )
+    return {"removed": len(body.lead_ids)}
+
+
+@api.get("/shared-leads")
+async def list_shared_leads(
+    user: dict = Depends(get_current_user),
+    q: Optional[str] = None,
+    limit: int = 500,
+):
+    """Public shared pool. Returns only minimal fields (name, address, plan)
+    for each row plus lock status. To see full details the caller must
+    acquire a lock via /leads/shared/{id}/lock."""
+    f = {"is_shared": True, "lead_status": {"$ne": "Complete"}}
+    if q:
+        f["$or"] = [
+            {"full_name": {"$regex": re.escape(q), "$options": "i"}},
+            {"city": {"$regex": re.escape(q), "$options": "i"}},
+            {"medicaid_provider": {"$regex": re.escape(q), "$options": "i"}},
+        ]
+    items = await db.leads.find(f).sort([("updated_at", -1)]).limit(limit).to_list(limit)
+
+    # Collect locker names (batched)
+    locker_ids = list({d.get("locked_by_user_id") for d in items if d.get("locked_by_user_id")})
+    name_map = {}
+    if locker_ids:
+        async for u in db.users.find({"_id": {"$in": locker_ids}}, {"first_name": 1, "last_name": 1}):
+            name_map[u["_id"]] = f"{u.get('first_name','')} {u.get('last_name','')}".strip()
+
+    out = []
+    for d in items:
+        active = _lock_is_active(d.get("locked_at"))
+        locked_by = d.get("locked_by_user_id") if active else None
+        # Compose "address" from parts for display
+        parts = [d.get("address"), d.get("city"), d.get("state")]
+        address = ", ".join([p for p in parts if p])
+        out.append({
+            "id": d["_id"],
+            "full_name": d.get("full_name") or "",
+            "address": address,
+            "plan": d.get("medicaid_provider") or d.get("medicare_parts") or "",
+            "lead_status": d.get("lead_status", "Uncalled"),
+            "is_locked": bool(locked_by and locked_by != user["_id"]),
+            "locked_by_me": bool(locked_by and locked_by == user["_id"]),
+            "locked_by_name": name_map.get(locked_by) if locked_by and locked_by != user["_id"] else None,
+        })
+    return {"total": len(out), "items": out}
+
+
+@api.post("/shared-leads/{lead_id}/lock")
+async def lock_shared_lead(lead_id: str, user: dict = Depends(get_current_user)):
+    """Attempt to acquire the exclusive open-lock on a shared lead.
+    Returns 200 if acquired (or already held by same user), 423 (Locked) otherwise."""
+    lead = await db.leads.find_one({"_id": lead_id})
+    if not lead or not lead.get("is_shared"):
+        raise HTTPException(404, "Shared lead not found")
+    now = datetime.now(timezone.utc).isoformat()
+    if _lock_is_active(lead.get("locked_at")) and lead.get("locked_by_user_id") != user["_id"]:
+        holder = await db.users.find_one({"_id": lead["locked_by_user_id"]}, {"first_name": 1, "last_name": 1})
+        holder_name = f"{holder.get('first_name','')} {holder.get('last_name','')}".strip() if holder else "another agent"
+        raise HTTPException(status_code=423, detail=f"Locked by {holder_name}")
+    await db.leads.update_one(
+        {"_id": lead_id},
+        {"$set": {"locked_by_user_id": user["_id"], "locked_at": now}},
+    )
+    return {"locked": True, "locked_at": now}
+
+
+@api.post("/shared-leads/{lead_id}/heartbeat")
+async def heartbeat_shared_lead(lead_id: str, user: dict = Depends(get_current_user)):
+    """Refresh the lock timestamp so it doesn't expire while the agent is actively working."""
+    lead = await db.leads.find_one({"_id": lead_id})
+    if not lead or not lead.get("is_shared"):
+        raise HTTPException(404, "Shared lead not found")
+    if lead.get("locked_by_user_id") != user["_id"]:
+        raise HTTPException(status_code=423, detail="Lock is not held by you")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.leads.update_one({"_id": lead_id}, {"$set": {"locked_at": now}})
+    return {"locked_at": now}
+
+
+@api.post("/shared-leads/{lead_id}/unlock")
+async def unlock_shared_lead(lead_id: str, user: dict = Depends(get_current_user)):
+    """Release the exclusive lock (only the holder can unlock; owners can force)."""
+    lead = await db.leads.find_one({"_id": lead_id})
+    if not lead or not lead.get("is_shared"):
+        raise HTTPException(404, "Shared lead not found")
+    if user["role"] != "owner" and lead.get("locked_by_user_id") != user["_id"]:
+        raise HTTPException(403, "Only the lock holder can unlock")
+    await db.leads.update_one(
+        {"_id": lead_id},
+        {"$set": {"locked_by_user_id": None, "locked_at": None}},
+    )
+    return {"unlocked": True}
+
+
+@api.get("/shared-leads/{lead_id}")
+async def get_shared_lead(lead_id: str, user: dict = Depends(get_current_user)):
+    """Full details of a shared lead — caller MUST hold the lock (or be owner).
+    Returns 423 (Locked) if another agent currently holds it."""
+    lead = await db.leads.find_one({"_id": lead_id})
+    if not lead or not lead.get("is_shared"):
+        raise HTTPException(404, "Shared lead not found")
+    active = _lock_is_active(lead.get("locked_at"))
+    holder = lead.get("locked_by_user_id")
+    if user["role"] != "owner":
+        if not active or holder != user["_id"]:
+            raise HTTPException(status_code=423, detail="You must claim this lead first")
+    return clean_doc(lead)
+
+
+@api.patch("/shared-leads/{lead_id}")
+async def update_shared_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depends(get_current_user)):
+    """Update a shared lead while an agent holds its lock.
+
+    Agents can normally only PATCH leads that scope to them, but shared-pool
+    leads have no assigned agent. The lock is the authorisation grant — the
+    holder can update status/notes/etc. Setting status to Complete also
+    auto-claims the lead (assigns to the current agent) so the win counts
+    on their leaderboard and appears under Book of Business as theirs.
+    """
+    lead = await db.leads.find_one({"_id": lead_id})
+    if not lead or not lead.get("is_shared"):
+        raise HTTPException(404, "Shared lead not found")
+    active = _lock_is_active(lead.get("locked_at"))
+    holder = lead.get("locked_by_user_id")
+    if user["role"] != "owner":
+        if not active or holder != user["_id"]:
+            raise HTTPException(status_code=423, detail="You must claim this lead first")
+
+    updates = body.model_dump(exclude_unset=True)
+    # Agents cannot reassign a shared lead via this endpoint
+    if user["role"] != "owner":
+        updates.pop("assigned_agent_id", None)
+        updates.pop("is_shared", None)
+
+    if "phone_number" in updates:
+        updates["normalized_phone_number"] = normalize_phone(updates["phone_number"])
+    if "first_name" in updates or "last_name" in updates:
+        fn = updates.get("first_name", lead.get("first_name", ""))
+        ln = updates.get("last_name", lead.get("last_name", ""))
+        updates["full_name"] = f"{fn} {ln}".strip()
+
+    # Status-transition side-effects
+    if "lead_status" in updates and updates["lead_status"] != lead.get("lead_status"):
+        if updates["lead_status"] == "Complete":
+            updates["completed_at"] = now_iso()
+            updates["completed_by_user_id"] = user["_id"]
+            # Claim the lead — it leaves the shared pool and belongs to the
+            # closing agent from here on (visible in their Book of Business).
+            updates["assigned_agent_id"] = user["_id"]
+            updates["is_shared"] = False
+            updates["locked_by_user_id"] = None
+            updates["locked_at"] = None
+        elif lead.get("lead_status") == "Complete":
+            updates["completed_at"] = None
+            updates["completed_by_user_id"] = None
+
+    updates["updated_at"] = now_iso()
+    await db.leads.update_one({"_id": lead_id}, {"$set": updates})
+    if "lead_status" in updates and updates["lead_status"] != lead.get("lead_status"):
+        await add_audit(user["_id"], "status_changed", "lead", lead_id,
+                        lead.get("lead_status"), updates["lead_status"])
+    return clean_doc(await db.leads.find_one({"_id": lead_id}))
+
+
 
 @api.get("/appointments/upcoming")
 async def upcoming_appointments(user: dict = Depends(get_current_user)):

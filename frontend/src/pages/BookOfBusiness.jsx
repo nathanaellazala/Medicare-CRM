@@ -36,6 +36,8 @@ export default function BookOfBusiness() {
   const [effectiveDraft, setEffectiveDraft] = useState("");
   const [completedDraft, setCompletedDraft] = useState("");
   const [selected, setSelected] = useState({}); // { [leadId]: true }
+  const [effFrom, setEffFrom] = useState("");
+  const [effTo, setEffTo] = useState("");
 
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
   const allSelected = items.length > 0 && items.every((l) => selected[l.id]);
@@ -70,6 +72,8 @@ export default function BookOfBusiness() {
     try {
       const params = { status: "Complete", sort: "updated_desc", limit: 500 };
       if (q) params.q = q;
+      if (effFrom) params.effective_from = effFrom;
+      if (effTo)   params.effective_to = effTo;
       const { data } = await api.get("/leads", { params });
       setItems(data.items);
       setTotal(data.total);
@@ -82,7 +86,7 @@ export default function BookOfBusiness() {
     const t = setTimeout(load, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line
-  }, [q]);
+  }, [q, effFrom, effTo]);
 
   const startEditEffective = (e, lead) => {
     e.stopPropagation();
@@ -156,7 +160,7 @@ export default function BookOfBusiness() {
         )}
       </div>
 
-      {/* Search + bulk-action bar */}
+      {/* Search + filters + bulk-action bar */}
       <div className="bg-white border border-slate-200 rounded-md p-3 mb-4 flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[240px]">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -168,8 +172,38 @@ export default function BookOfBusiness() {
             data-testid="bob-search"
           />
         </div>
+        <div className="flex items-center gap-2">
+          <CalIcon size={14} className="text-slate-500"/>
+          <span className="text-xs text-slate-600 whitespace-nowrap">Effective</span>
+          <Input
+            type="date"
+            value={effFrom}
+            onChange={(e) => setEffFrom(e.target.value)}
+            className="h-9 w-40 text-sm"
+            data-testid="bob-eff-from"
+            placeholder="From"
+          />
+          <span className="text-xs text-slate-400">to</span>
+          <Input
+            type="date"
+            value={effTo}
+            onChange={(e) => setEffTo(e.target.value)}
+            className="h-9 w-40 text-sm"
+            data-testid="bob-eff-to"
+            placeholder="To"
+          />
+          {(effFrom || effTo) && (
+            <button
+              onClick={() => { setEffFrom(""); setEffTo(""); }}
+              className="text-xs text-slate-500 hover:text-slate-800 px-1"
+              data-testid="bob-eff-clear"
+            >
+              Clear
+            </button>
+          )}
+        </div>
         {isOwner && selectedIds.length > 0 && (
-          <div className="flex items-center gap-2" data-testid="bob-bulk-bar">
+          <div className="flex items-center gap-2 ml-auto" data-testid="bob-bulk-bar">
             <span className="text-xs text-slate-600 font-medium">
               {selectedIds.length} selected
             </span>

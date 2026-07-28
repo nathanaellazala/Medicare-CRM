@@ -1,0 +1,67 @@
+{
+  "summary": "Iteration 4 — Shared pool + BoB effective date filter + Leads no-refresh + PATCH /shared-leads/{id} bug-fix verification. Backend: 12/12 tests pass (added 4 new tests for the dedicated PATCH endpoint covering lock-holder success, non-holder 423, Complete auto-claim + BoB visibility, and 404). Frontend: uncovered a NEW CRITICAL bug that prevents agents from opening any shared-lead detail page in the running preview build — a race caused by React 18 StrictMode + the unmount-cleanup unlock in SharedLeadDetail.jsx.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "SharedLeadDetail.jsx (lines 65-86)",
+        "issue": "Race condition: the unmount-cleanup calls release() unconditionally, sending POST /shared-leads/{id}/unlock via fetch(keepalive). Under React 18 StrictMode (enabled in /src/index.js and running under craco start dev server on the preview URL), the effect mounts → cleans up → mounts again on the very first navigation. The cleanup's async unlock races with the bootstrap's Promise.all([GET /shared-leads/{id}, GET /statuses]) and arrives at the server BEFORE the GET, so the GET returns 423 'You must claim this lead first' and the user is bounced back to /shared-leads with an error toast. Backend logs confirmed the sequence: lock 200 → lock 200 → lock 200 → unlock 200 → GET 423. This is reproducible 100% of the time when an agent clicks any Available row in the shared pool.",
+        "selector": "[data-testid^='shared-row-']",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Agent opens shared lead → PATCH /shared-leads/{id} status change → Complete",
+        "issue": "Cannot be reached from the UI due to the SharedLeadDetail unlock-race bug above. The backend PATCH endpoint itself works correctly (verified via API tests) — the failure is purely on the client-side lifecycle handling.",
+        "affected_selectors": ["[data-testid='shared-status-select']", "[data-testid='shared-back']"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Leads.jsx quickStatus inline dropdown",
+        "issues": [
+          "The inline row Select (line 419) does not have a data-testid (e.g. 'quick-status-{id}'). Please add one to make the per-row status change testable, as called out in the review request."
+        ]
+      },
+      {
+        "screen": "SharedLeadDetail.jsx",
+        "issues": [
+          "The status Select data-testid is 'shared-status-select', but the review request refers to 'shared-lead-status'. Either testid works for testing but naming should be consistent across the review spec and code."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4_shared_pool.py",
+    "/app/test_reports/pytest/iter4_v2.xml"
+  ],
+  "action_items": [
+    "CRITICAL — Fix SharedLeadDetail.jsx race: gate the effect-cleanup release() so it only fires on true unmount/page-unload, not on StrictMode remount. Options: (a) split the beforeunload listener into its own effect with no cleanup-release, (b) skip the cleanup release() when releasedRef.current has just been set (add a short-lived guard), or (c) simplest: only release inside the beforeunload handler and inside the explicit releaseAndLeave button, remove the release() call at line 84 of the cleanup. Also consider making the unlock endpoint idempotent-with-serverside-sequencing (e.g. only unlock if lock is still held by same user AND lock_seq matches).",
+    "Add data-testid='quick-status-{id}' to the inline row Select on Leads.jsx around line 419 so per-row status changes can be automated (currently only accessible via generic [role='combobox']).",
+    "Re-run frontend Playwright scenarios for shared-pool status change + Complete flow once the race is fixed."
+  ],
+  "critical_code_review_comments": [
+    "SharedLeadDetail.jsx — unmount-cleanup unlock is the classic StrictMode footgun: async cleanup that mutates server state races with concurrent bootstrap requests. It's also fragile in production if the user navigates rapidly.",
+    "Backend PATCH /shared-leads/{lead_id} is well-designed — locking as authorisation, auto-claim on Complete, agents blocked from reassigning. Confirmed by 4 new pytest cases.",
+    "SharedLeadDetail bootstrap POSTs /lock even when the list page already locked it in openLead(); the second POST is idempotent server-side so this is harmless but wastes a round-trip.",
+    "Leads.jsx quickStatus uses setItems local update — confirmed no full refetch; testability gap is only the missing data-testid.",
+    "Frontend running on craco start (dev) in preview: consider whether preview should be `yarn build && serve` to catch these StrictMode-dev-only issues before production, OR keep StrictMode but write effects that tolerate double-invocation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter4_shared_pool.py (line 21 default-URL fallback + added TestSharedLeadPatchEndpoint class with 4 new tests)"
+  ],
+  "success_rate": {
+    "backend": "100% (12/12)",
+    "frontend": "~55% — sidebar/link visibility, BoB filter inputs, shared-list minimal-field shape, and PATCH endpoint all confirmed indirectly; end-to-end status change UI on /shared-leads/{id} is blocked by the SharedLeadDetail race bug."
+  },
+  "test_credentials": "owner@healthexpertscrm.com / Password123!, agent1@healthexpertscrm.com / Password123!, agent2@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "Test lead UITEST_5d81b Client (id 6e2d1e01-f1f9-4d18-bbb0-a7a8d7890304) was seeded into the shared pool for UI testing; it remains in the pool for reproduction. Additional UITEST_* leads may also be present. Clean up with owner /shared-leads/remove + /leads/bulk-delete when done.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Backend is fully green including the previously-fixed PATCH-404 bug on /shared-leads/{id}. The remaining blocker is a frontend race in SharedLeadDetail.jsx's effect cleanup that unlocks the lead before the initial GET returns, giving 423 and bouncing the agent back to the shared list. Reproduce by logging in as agent1, clicking any Available row on /shared-leads — you'll see backend logs: lock 200, lock 200, unlock 200, GET 423. Once the main agent fixes this, re-run the frontend Playwright to confirm status change → Complete → 'Nice — win recorded' toast → navigation back to /shared-leads → lead in Book of Business under agent1's name.",
+  "rca of the issue": "React 18 StrictMode double-invokes effects in development. The useEffect at SharedLeadDetail.jsx:65-86 registers a beforeunload listener AND returns a cleanup that calls release() (which POSTs unlock via fetch keepalive). On first render, the cleanup fires between the two mount cycles. `releasedRef.current` gets set to true, so the second cleanup is a no-op — but the DB has already been unlocked. Meanwhile the bootstrap effect at :25 has issued POST /lock (200) and is waiting on Promise.all([GET /shared-leads/{id}, GET /statuses]). The unlock arrives at the server between the lock and the GET (server logs prove this: lock, lock, lock, unlock, GET 423). Mitigation: remove the release() call from the cleanup (line 84) and rely on the explicit releaseAndLeave button + beforeunload handler; OR move the beforeunload registration to its own effect with no cleanup side-effect; OR gate release() with a mounted-duration guard (`if (Date.now() - mountedAt < 500) return`)."
+}
