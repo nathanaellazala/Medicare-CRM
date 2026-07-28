@@ -417,11 +417,11 @@ export default function Leads() {
                   </td>
                   <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                     <Select value={lead.lead_status} onValueChange={(v) => quickStatus(lead.id, v)}>
-                      <SelectTrigger className="h-7 w-auto min-w-[140px] border-0 bg-transparent p-0 hover:bg-slate-100 px-2 [&>span]:line-clamp-none [&>svg]:hidden focus:ring-0">
+                      <SelectTrigger data-testid={`quick-status-${lead.id}`} className="h-7 w-auto min-w-[140px] border-0 bg-transparent p-0 hover:bg-slate-100 px-2 [&>span]:line-clamp-none [&>svg]:hidden focus:ring-0">
                         <StatusBadge status={lead.lead_status}/>
                       </SelectTrigger>
                       <SelectContent>
-                        {statuses.map((s) => <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>)}
+                        {statuses.map((s) => <SelectItem key={s.id} value={s.name} data-testid={`quick-status-opt-${lead.id}-${s.name.replace(/\s+/g, "-")}`}>{s.name}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </td>

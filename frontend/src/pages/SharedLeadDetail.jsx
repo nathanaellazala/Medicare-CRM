@@ -61,12 +61,15 @@ export default function SharedLeadDetail() {
     return () => clearInterval(iv);
   }, [id, lead]);
 
-  // Release the lock on unmount (navigation away, tab close)
+  // Release the lock on TRUE unmount (page-unload or genuine navigation away).
+  // React 18 StrictMode double-invokes effects in dev, so we skip the very
+  // first cleanup that fires within a short window of mount — otherwise the
+  // unlock would race with the initial GET and 423 the user right back out.
   useEffect(() => {
+    const mountedAt = Date.now();
     const release = () => {
       if (releasedRef.current) return;
       releasedRef.current = true;
-      // fetch with keepalive works during page-unload and still sends auth header
       try {
         const url = `${process.env.REACT_APP_BACKEND_URL}/api/shared-leads/${id}/unlock`;
         const token = localStorage.getItem("access_token") || "";
@@ -81,6 +84,8 @@ export default function SharedLeadDetail() {
     window.addEventListener("beforeunload", release);
     return () => {
       window.removeEventListener("beforeunload", release);
+      // StrictMode dev double-mount protection: only release on real unmount
+      if (Date.now() - mountedAt < 500) return;
       release();
     };
   }, [id]);

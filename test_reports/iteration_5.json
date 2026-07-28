@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 5 — Frontend re-test after the StrictMode race fix in SharedLeadDetail.jsx (mount-duration guard). RESULT: The critical bug from iteration_4 is FIXED. Agents can now open shared-lead detail pages end-to-end. All PRIORITY-1 flows pass. Also verified: 2-agent 'In use by' interlock, BoB effective-date filter query params, and the new quick-status-{id} testid (code-verified; agent1 had no assigned leads in test data so no live DOM element to click but the testid is correctly present in Leads.jsx line 420).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Book of Business row",
+        "issues": ["Name column shows '—' instead of the completed client's full_name for freshly Completed shared leads. The lead is correctly recorded (phone/birthdate/city all show), but the NAME cell renders a dash. Likely a display-mapping bug in BookOfBusiness.jsx — completed_by_name flows correctly but the lead's full_name may not be projected to the row's name cell. Low priority since data is present in DB."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter4_shared_pool.py"
+  ],
+  "action_items": [
+    "OPTIONAL: In Book of Business list, ensure the NAME column renders lead.full_name (currently shows '—' for completed shared leads). Data is present server-side; likely a small mapping fix in BookOfBusiness.jsx."
+  ],
+  "critical_code_review_comments": [
+    "SharedLeadDetail.jsx: The mount-duration guard `if (Date.now() - mountedAt < 500) return;` is placed inside the cleanup RETURN, so it correctly no-ops the StrictMode double-invoke cleanup while still releasing on genuine unmount >500ms after mount. beforeunload handler is unaffected. Clean, minimal patch.",
+    "Note: In dev-StrictMode the network trace still shows 3× POST /lock (initial mount + strict-remount + heartbeat setup) before the GET — 200s all around because lock is idempotent. Not a bug, but a small wasted round-trip.",
+    "quick-status-{id} testid confirmed at Leads.jsx:420 and quick-status-opt-{leadId}-{StatusName} at line 424."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "100% (previous iteration)", "frontend": "~95% — all PRIORITY-1 flows verified end-to-end; only cosmetic BoB name-column gap remains" },
+  "test_credentials": "owner@healthexpertscrm.com / Password123!, agent1@healthexpertscrm.com / Password123!, agent2@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "Two RETEST_/INUSE_ leads were created and moved to shared pool during testing. RETEST_ was Completed (now in BoB under Agent 1). INUSE_ was released back to shared pool as Available after the 2-agent interlock test — owner may want to clean up.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "SharedLeadDetail race bug is FIXED. Verified network trace: POST /lock 200 → POST /lock 200 (strict remount) → POST /lock 200 → GET /shared-leads/{id} 200 (no rogue unlock, no 423). Agent1 status update flow verified: PATCH No Answer 200 → PATCH Complete 200 → auto-navigate to /shared-leads → lead appears in Book of Business under Agent 1. Two-agent interlock verified: agent2 sees 'In use by Agent 1' with opacity-60 cursor-not-allowed row and cannot click into it; after agent1 clicks 'Release lock', reloading /shared-leads for agent2 shows 'Available'. BoB filter verified: GET /api/leads?status=Complete&sort=updated_desc&limit=500&effective_from=2026-01-01&effective_to=2026-06-30. Only minor cosmetic issue: BoB NAME column renders '—' instead of the lead's full_name for freshly completed shared leads.",
+  "rca_of_the_issue": "N/A — bug from iteration_4 confirmed fixed. The mount-duration guard (`if (Date.now() - mountedAt < 500) return;` inside the useEffect cleanup) correctly suppresses the spurious StrictMode dev double-invoke unlock while preserving genuine unmount + beforeunload semantics."
+}
