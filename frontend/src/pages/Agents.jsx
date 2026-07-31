@@ -10,7 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { UserPlus, KeyRound, CheckCircle, Trophy, Circle, ShieldCheck, Pencil, Save, BarChart3 } from "lucide-react";
+import { UserPlus, KeyRound, CheckCircle, Trophy, Circle, ShieldCheck, Pencil, Save, BarChart3, Radio } from "lucide-react";
 
 export default function Agents() {
   const [agents, setAgents] = useState([]);
@@ -52,6 +52,7 @@ export default function Agents() {
       email: a.email || "",
       status: a.status || "active",
       on_leaderboard: a.on_leaderboard !== false,
+      can_access_shared_pool: a.can_access_shared_pool !== false,
     });
     setResetPass("");
   };
@@ -65,6 +66,7 @@ export default function Agents() {
         email: editForm.email,
         status: editForm.status,
         on_leaderboard: editForm.on_leaderboard,
+        can_access_shared_pool: editForm.can_access_shared_pool,
       };
       await api.patch(`/users/${openEdit.id}`, payload);
       if (resetPass) {
@@ -358,6 +360,23 @@ export default function Agents() {
                   checked={!!editForm.on_leaderboard}
                   onCheckedChange={(v) => setEditForm({ ...editForm, on_leaderboard: v })}
                   data-testid="edit-lb-switch"
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-md border border-slate-200 bg-slate-50">
+                <div>
+                  <div className="text-sm font-medium text-slate-900 flex items-center gap-1.5">
+                    <Radio size={13} className={editForm.can_access_shared_pool ? "text-[#026AA2]" : "text-slate-400"}/>
+                    Shared pool access
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Let this agent see and claim leads in the Shared Leads pool.
+                  </div>
+                </div>
+                <Switch
+                  checked={!!editForm.can_access_shared_pool}
+                  onCheckedChange={(v) => setEditForm({ ...editForm, can_access_shared_pool: v })}
+                  data-testid="edit-shared-switch"
                 />
               </div>
             </div>

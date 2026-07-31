@@ -38,6 +38,7 @@ export default function BookOfBusiness() {
   const [selected, setSelected] = useState({}); // { [leadId]: true }
   const [effFrom, setEffFrom] = useState("");
   const [effTo, setEffTo] = useState("");
+  const [sort, setSort] = useState("updated_desc");
 
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
   const allSelected = items.length > 0 && items.every((l) => selected[l.id]);
@@ -70,7 +71,7 @@ export default function BookOfBusiness() {
   const load = async () => {
     setLoading(true);
     try {
-      const params = { status: "Complete", sort: "updated_desc", limit: 500 };
+      const params = { status: "Complete", sort, limit: 500 };
       if (q) params.q = q;
       if (effFrom) params.effective_from = effFrom;
       if (effTo)   params.effective_to = effTo;
@@ -86,7 +87,17 @@ export default function BookOfBusiness() {
     const t = setTimeout(load, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line
-  }, [q, effFrom, effTo]);
+  }, [q, effFrom, effTo, sort]);
+
+  const toggleSort = (key) => {
+    const asc = `${key}_asc`, desc = `${key}_desc`;
+    setSort((s) => (s === asc ? desc : asc));
+  };
+  const sortIcon = (key) => {
+    if (sort === `${key}_asc`)  return <span className="text-[#026AA2] ml-1">↑</span>;
+    if (sort === `${key}_desc`) return <span className="text-[#026AA2] ml-1">↓</span>;
+    return null;
+  };
 
   const startEditEffective = (e, lead) => {
     e.stopPropagation();
@@ -241,16 +252,16 @@ export default function BookOfBusiness() {
                     />
                   </th>
                 )}
-                <th className="px-4 py-3">Name</th>
+                <th onClick={() => toggleSort("name")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]" data-testid="bob-sort-name">Name{sortIcon("name")}</th>
                 <th className="px-4 py-3">Phone</th>
                 <th className="px-4 py-3">Birthdate</th>
-                <th className="px-4 py-3">City / State</th>
-                <th className="px-4 py-3">Provider</th>
-                <th className="px-4 py-3">
-                  <span className="inline-flex items-center gap-1"><CalIcon size={11}/> Effective</span>
+                <th onClick={() => toggleSort("city")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]" data-testid="bob-sort-city">City / State{sortIcon("city")}</th>
+                <th onClick={() => toggleSort("plan")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]" data-testid="bob-sort-plan">Provider{sortIcon("plan")}</th>
+                <th onClick={() => toggleSort("effective")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]" data-testid="bob-sort-effective">
+                  <span className="inline-flex items-center gap-1"><CalIcon size={11}/> Effective</span>{sortIcon("effective")}
                 </th>
-                <th className="px-4 py-3">
-                  <span className="inline-flex items-center gap-1"><CheckCircle2 size={11}/> Completed</span>
+                <th onClick={() => toggleSort("completed")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]" data-testid="bob-sort-completed">
+                  <span className="inline-flex items-center gap-1"><CheckCircle2 size={11}/> Completed</span>{sortIcon("completed")}
                 </th>
                 {isOwner && (
                   <th className="px-4 py-3">

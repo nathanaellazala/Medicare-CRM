@@ -275,6 +275,7 @@ class UserUpdateIn(BaseModel):
     email: Optional[EmailStr] = None
     status: Optional[Literal["active", "inactive"]] = None
     on_leaderboard: Optional[bool] = None
+    can_access_shared_pool: Optional[bool] = None
     visible_fields: Optional[List[str]] = None
 
 class PasswordResetIn(BaseModel):
@@ -439,6 +440,7 @@ async def list_users(user: dict = Depends(get_current_user)):
         else:
             cu["activity_status"] = "inactive"
         cu["on_leaderboard"] = u.get("on_leaderboard", True)
+        cu["can_access_shared_pool"] = u.get("can_access_shared_pool", True)
         result.append(cu)
     return result
 
@@ -751,12 +753,21 @@ async def list_leads(
         f["$or"] = or_clauses
 
     sort_map = {
-        "updated_desc": [("updated_at", -1)],
-        "updated_asc": [("updated_at", 1)],
-        "created_desc": [("created_at", -1)],
-        "created_asc": [("created_at", 1)],
-        "name_asc": [("full_name", 1)],
-        "status": [("lead_status", 1)],
+        "updated_desc":   [("updated_at", -1)],
+        "updated_asc":    [("updated_at", 1)],
+        "created_desc":   [("created_at", -1)],
+        "created_asc":    [("created_at", 1)],
+        "name_asc":       [("full_name", 1)],
+        "name_desc":      [("full_name", -1)],
+        "status":         [("lead_status", 1)],
+        "effective_asc":  [("effective_date", 1)],
+        "effective_desc": [("effective_date", -1)],
+        "completed_asc":  [("completed_at", 1)],
+        "completed_desc": [("completed_at", -1)],
+        "city_asc":       [("city", 1)],
+        "city_desc":      [("city", -1)],
+        "plan_asc":       [("medicaid_provider", 1)],
+        "plan_desc":      [("medicaid_provider", -1)],
     }
     sort_spec = sort_map.get(sort, [("updated_at", -1)])
     total = await db.leads.count_documents(f)
@@ -1073,15 +1084,93 @@ async def remove_from_shared_pool(body: SharedMoveIn, user: dict = Depends(requi
     return {"removed": len(body.lead_ids)}
 
 
+class SharedAssignIn(BaseModel):
+    lead_ids: List[str]
+    agent_id: str
+
+
+@api.post("/shared-leads/assign")
+async def assign_shared_leads(body: SharedAssignIn, user: dict = Depends(require_owner)):
+    """Owner transfers shared-pool leads to a specific agent. Wipes history so
+    the receiving agent gets a fresh slate (same semantics as /leads/assign)."""
+    if not body.lead_ids:
+        raise HTTPException(400, "lead_ids required")
+    await _wipe_lead_history(body.lead_ids)
+    now = now_iso()
+    await db.leads.update_many(
+        {"_id": {"$in": body.lead_ids}, "is_shared": True},
+        {"$set": {
+            "assigned_agent_id": body.agent_id,
+            "is_shared": False,
+            "locked_by_user_id": None,
+            "locked_at": None,
+            "current_assignment_at": now,
+            "lead_status": "Uncalled",
+            "completed_at": None,
+            "completed_by_user_id": None,
+            "effective_date": None,
+            "application_info": None,
+            "hra_info": None,
+            "appointment_at": None,
+            "updated_at": now,
+        }},
+    )
+    await db.audit_logs.insert_many(_audit_docs(user["_id"], "lead_assigned", body.lead_ids, body.agent_id))
+    return {"assigned": len(body.lead_ids)}
+
+
+@api.post("/shared-leads/bulk-delete")
+async def bulk_delete_shared_leads(body: dict, user: dict = Depends(require_owner)):
+    ids = body.get("lead_ids", [])
+    if not ids:
+        raise HTTPException(400, "lead_ids required")
+    res = await db.leads.delete_many({"_id": {"$in": ids}, "is_shared": True})
+    await db.notes.delete_many({"lead_id": {"$in": ids}})
+    await db.call_logs.delete_many({"lead_id": {"$in": ids}})
+    await db.audit_logs.insert_many(_audit_docs(user["_id"], "lead_deleted", ids))
+    return {"deleted": res.deleted_count}
+
+
+@api.get("/shared-leads/export/csv")
+async def export_shared_leads_csv(user: dict = Depends(require_owner), q: Optional[str] = None):
+    f = {"is_shared": True}
+    if q:
+        f["$or"] = [
+            {"full_name": {"$regex": re.escape(q), "$options": "i"}},
+            {"city": {"$regex": re.escape(q), "$options": "i"}},
+            {"medicaid_provider": {"$regex": re.escape(q), "$options": "i"}},
+        ]
+    items = await db.leads.find(f).to_list(20000)
+    output = io.StringIO()
+    cols = [
+        "full_name", "phone_number", "birthdate", "address", "city", "state", "zip_code",
+        "county", "medicaid_number", "medicare_number", "medicaid_provider",
+        "medicare_parts", "lead_type", "lead_status",
+        "created_at", "updated_at",
+    ]
+    w = csv.writer(output)
+    w.writerow([c.replace("_", " ").title() for c in cols])
+    for it in items:
+        w.writerow([it.get(c, "") or "" for c in cols])
+    output.seek(0)
+    return StreamingResponse(iter([output.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=shared_leads.csv"})
+
+
 @api.get("/shared-leads")
 async def list_shared_leads(
     user: dict = Depends(get_current_user),
     q: Optional[str] = None,
+    sort: str = "updated_desc",
     limit: int = 500,
 ):
     """Public shared pool. Returns only minimal fields (name, address, plan)
     for each row plus lock status. To see full details the caller must
-    acquire a lock via /leads/shared/{id}/lock."""
+    acquire a lock via /shared-leads/{id}/lock."""
+    # Access gate for agents (owner may disable this per user)
+    if user["role"] == "agent" and user.get("can_access_shared_pool") is False:
+        return {"total": 0, "items": []}
+
     f = {"is_shared": True, "lead_status": {"$ne": "Complete"}}
     if q:
         f["$or"] = [
@@ -1089,7 +1178,20 @@ async def list_shared_leads(
             {"city": {"$regex": re.escape(q), "$options": "i"}},
             {"medicaid_provider": {"$regex": re.escape(q), "$options": "i"}},
         ]
-    items = await db.leads.find(f).sort([("updated_at", -1)]).limit(limit).to_list(limit)
+
+    # Sort spec — reuse the same helper the main leads list uses
+    sort_map = {
+        "updated_desc": [("updated_at", -1)],
+        "updated_asc":  [("updated_at", 1)],
+        "name_asc":     [("full_name", 1)],
+        "name_desc":    [("full_name", -1)],
+        "city_asc":     [("city", 1)],
+        "city_desc":    [("city", -1)],
+        "plan_asc":     [("medicaid_provider", 1)],
+        "plan_desc":    [("medicaid_provider", -1)],
+    }
+    sort_spec = sort_map.get(sort, sort_map["updated_desc"])
+    items = await db.leads.find(f).sort(sort_spec).limit(limit).to_list(limit)
 
     # Collect locker names (batched)
     locker_ids = list({d.get("locked_by_user_id") for d in items if d.get("locked_by_user_id")})
@@ -2016,6 +2118,8 @@ async def startup():
     await db.leads.update_many({"lead_type": {"$exists": False}}, {"$set": {"lead_type": "New to Medicare"}})
     # Backfill on_leaderboard on users
     await db.users.update_many({"on_leaderboard": {"$exists": False}}, {"$set": {"on_leaderboard": True}})
+    # Backfill can_access_shared_pool on users (default: agents can access)
+    await db.users.update_many({"can_access_shared_pool": {"$exists": False}}, {"$set": {"can_access_shared_pool": True}})
     # Backfill visible_fields (default: all toggleable fields visible)
     await db.users.update_many(
         {"visible_fields": {"$exists": False}},
