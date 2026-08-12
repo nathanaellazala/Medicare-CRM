@@ -710,6 +710,8 @@ async def list_leads(
     status: Optional[str] = None,
     agent_id: Optional[str] = None,
     state: Optional[str] = None,
+    city: Optional[str] = None,
+    zip_code: Optional[str] = None,
     county: Optional[str] = None,
     medicare_parts: Optional[str] = None,
     medicaid_provider: Optional[str] = None,
@@ -729,6 +731,8 @@ async def list_leads(
     if agent_id and user["role"] == "owner":
         f["assigned_agent_id"] = None if agent_id == "unassigned" else agent_id
     if state: f["state"] = state.upper()
+    if city: f["city"] = {"$regex": f"^{re.escape(city)}", "$options": "i"}
+    if zip_code: f["zip_code"] = {"$regex": f"^{re.escape(zip_code)}"}
     if county: f["county"] = {"$regex": f"^{re.escape(county)}$", "$options": "i"}
     if medicare_parts: f["medicare_parts"] = {"$regex": re.escape(medicare_parts), "$options": "i"}
     if medicaid_provider: f["medicaid_provider"] = {"$regex": re.escape(medicaid_provider), "$options": "i"}
@@ -1019,6 +1023,104 @@ async def bulk_delete_leads(body: dict, user: dict = Depends(require_owner)):
     await db.call_logs.delete_many({"lead_id": {"$in": ids}})
     await db.audit_logs.insert_many(_audit_docs(user["_id"], "lead_deleted", ids))
     return {"deleted": res.deleted_count}
+
+
+# ============================================================================
+# Plan Brochures — Insurance Carrier → Plan → PDF (owner manages, all view)
+# ============================================================================
+import base64  # noqa: E402
+from fastapi import File, UploadFile, Form  # noqa: E402
+
+
+class CarrierIn(BaseModel):
+    name: str
+    sort_order: int = 0
+
+
+@api.get("/carriers")
+async def list_carriers(user: dict = Depends(get_current_user)):
+    docs = await db.insurance_carriers.find().sort([("sort_order", 1), ("name", 1)]).to_list(500)
+    # Attach plan metadata (no binary PDF payloads in the list response)
+    ids = [d["_id"] for d in docs]
+    plans_by_carrier: Dict[str, list] = {i: [] for i in ids}
+    async for p in db.insurance_plans.find(
+        {"carrier_id": {"$in": ids}},
+        {"name": 1, "carrier_id": 1, "brochure_filename": 1, "created_at": 1},
+    ).sort([("name", 1)]):
+        plans_by_carrier[p["carrier_id"]].append({
+            "id": p["_id"],
+            "name": p.get("name"),
+            "brochure_filename": p.get("brochure_filename"),
+            "has_pdf": bool(p.get("brochure_filename")),
+        })
+    return [
+        {"id": d["_id"], "name": d.get("name"), "sort_order": d.get("sort_order", 0),
+         "plans": plans_by_carrier.get(d["_id"], [])}
+        for d in docs
+    ]
+
+
+@api.post("/carriers")
+async def create_carrier(body: CarrierIn, user: dict = Depends(require_owner)):
+    doc = {"_id": str(uuid.uuid4()), "name": body.name.strip(), "sort_order": body.sort_order,
+           "created_at": now_iso(), "updated_at": now_iso()}
+    await db.insurance_carriers.insert_one(doc)
+    return {"id": doc["_id"], "name": doc["name"], "sort_order": doc["sort_order"], "plans": []}
+
+
+@api.patch("/carriers/{cid}")
+async def update_carrier(cid: str, body: CarrierIn, user: dict = Depends(require_owner)):
+    await db.insurance_carriers.update_one({"_id": cid},
+        {"$set": {"name": body.name.strip(), "sort_order": body.sort_order, "updated_at": now_iso()}})
+    return {"ok": True}
+
+
+@api.delete("/carriers/{cid}")
+async def delete_carrier(cid: str, user: dict = Depends(require_owner)):
+    await db.insurance_plans.delete_many({"carrier_id": cid})
+    await db.insurance_carriers.delete_one({"_id": cid})
+    return {"deleted": True}
+
+
+@api.post("/carriers/{cid}/plans")
+async def create_plan(
+    cid: str,
+    user: dict = Depends(require_owner),
+    name: str = Form(...),
+    brochure: Optional[UploadFile] = File(None),
+):
+    if not await db.insurance_carriers.find_one({"_id": cid}):
+        raise HTTPException(404, "Carrier not found")
+    plan_id = str(uuid.uuid4())
+    doc = {"_id": plan_id, "carrier_id": cid, "name": name.strip(),
+           "created_at": now_iso(), "updated_at": now_iso()}
+    if brochure is not None:
+        data = await brochure.read()
+        if len(data) > 15 * 1024 * 1024:
+            raise HTTPException(400, "PDF too large — 15 MB max")
+        doc["brochure_pdf_base64"] = base64.b64encode(data).decode("ascii")
+        doc["brochure_mime"] = brochure.content_type or "application/pdf"
+        doc["brochure_filename"] = brochure.filename or "brochure.pdf"
+    await db.insurance_plans.insert_one(doc)
+    return {"id": plan_id, "name": doc["name"], "brochure_filename": doc.get("brochure_filename"),
+            "has_pdf": "brochure_pdf_base64" in doc}
+
+
+@api.delete("/carriers/{cid}/plans/{pid}")
+async def delete_plan(cid: str, pid: str, user: dict = Depends(require_owner)):
+    await db.insurance_plans.delete_one({"_id": pid, "carrier_id": cid})
+    return {"deleted": True}
+
+
+@api.get("/plans/{pid}/pdf")
+async def get_plan_pdf(pid: str, user: dict = Depends(get_current_user)):
+    p = await db.insurance_plans.find_one({"_id": pid})
+    if not p or not p.get("brochure_pdf_base64"):
+        raise HTTPException(404, "Brochure PDF not found")
+    data = base64.b64decode(p["brochure_pdf_base64"])
+    fname = p.get("brochure_filename") or "brochure.pdf"
+    return StreamingResponse(iter([data]), media_type=p.get("brochure_mime", "application/pdf"),
+        headers={"Content-Disposition": f'inline; filename="{fname}"'})
 
 
 # ============================================================================
@@ -1866,6 +1968,18 @@ def _period_range(period: str, month_offset: int = 0):
         start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) - timedelta(days=weekday) - timedelta(weeks=month_offset)
         end = start + timedelta(days=7)
         label = f"Week of {start.strftime('%b %d, %Y')}"
+    elif period == "next_month":
+        # Rolling next-calendar-month window. Useful for insurance where a
+        # sale closed this month is effective the following month.
+        y, m = now.year, now.month
+        total = y * 12 + (m - 1) + 1 - month_offset
+        y2, m2 = total // 12, total % 12 + 1
+        start = datetime(y2, m2, 1, tzinfo=timezone.utc)
+        if m2 == 12:
+            end = datetime(y2 + 1, 1, 1, tzinfo=timezone.utc)
+        else:
+            end = datetime(y2, m2 + 1, 1, tzinfo=timezone.utc)
+        label = start.strftime("%B %Y")
     else:  # month
         y, m = now.year, now.month
         # subtract month_offset months
@@ -1975,9 +2089,9 @@ async def _leaderboard_rows(period: str, offset: int, basis: str = "completed"):
 
 
 @api.get("/leaderboard")
-async def leaderboard(user: dict = Depends(get_current_user), period: str = "week", offset: int = 0, basis: str = "completed"):
-    period = period if period in ("today", "week", "month") else "week"
-    basis = basis if basis in ("completed", "effective") else "completed"
+async def leaderboard(user: dict = Depends(get_current_user), period: str = "next_month", offset: int = 0, basis: str = "effective"):
+    period = period if period in ("today", "week", "month", "next_month") else "next_month"
+    basis = basis if basis in ("completed", "effective") else "effective"
     current, label = await _leaderboard_rows(period, offset, basis)
     # previous period for movement arrows
     prev, _ = await _leaderboard_rows(period, offset + 1, basis)

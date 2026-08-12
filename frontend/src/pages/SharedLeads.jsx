@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Switch } from "@/components/ui/switch";
 import { Users, Search, Lock, LockOpen, ChevronRight, Radio, Trash2, Shuffle, Download, Shield, ArrowUp, ArrowDown } from "lucide-react";
 import { toast } from "sonner";
+import { useScrollRestore } from "@/lib/useScrollRestore";
 
 export default function SharedLeads() {
   const { user } = useAuth();
@@ -50,6 +51,8 @@ export default function SharedLeads() {
     return () => clearInterval(iv);
     // eslint-disable-next-line
   }, []);
+
+  useScrollRestore("shared-leads", !loading);
 
   // Load agents list once (owner only)
   useEffect(() => {
@@ -260,11 +263,11 @@ export default function SharedLeads() {
                         />
                       </td>
                     )}
-                    <td onClick={() => openLead(lead)} className={`px-4 py-3 text-sm font-medium text-slate-900 ${locked ? "cursor-not-allowed" : "cursor-pointer"}`} data-testid={`shared-name-${lead.id}`}>
+                    <td onDoubleClick={() => openLead(lead)} title="Double-click to claim & open" className={`px-4 py-3 text-sm font-medium text-slate-900 select-text ${locked ? "cursor-not-allowed" : "cursor-pointer"}`} data-testid={`shared-name-${lead.id}`}>
                       {lead.full_name || "—"}
                     </td>
-                    <td onClick={() => openLead(lead)} className={`px-4 py-3 text-sm text-slate-700 ${locked ? "cursor-not-allowed" : "cursor-pointer"}`}>{lead.address || "—"}</td>
-                    <td onClick={() => openLead(lead)} className={`px-4 py-3 text-sm text-slate-700 ${locked ? "cursor-not-allowed" : "cursor-pointer"}`}>{lead.plan || <span className="text-slate-400">—</span>}</td>
+                    <td onDoubleClick={() => openLead(lead)} className={`px-4 py-3 text-sm text-slate-700 select-text ${locked ? "cursor-not-allowed" : "cursor-pointer"}`}>{lead.address || "—"}</td>
+                    <td onDoubleClick={() => openLead(lead)} className={`px-4 py-3 text-sm text-slate-700 select-text ${locked ? "cursor-not-allowed" : "cursor-pointer"}`}>{lead.plan || <span className="text-slate-400">—</span>}</td>
                     <td className="px-4 py-3 text-xs">
                       {mine ? (
                         <span className="inline-flex items-center gap-1 text-[#026AA2] font-medium" data-testid={`shared-mine-${lead.id}`}>

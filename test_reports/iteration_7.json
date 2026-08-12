@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 7 — Leaderboard default (next_month+effective), Plan Brochures section, scroll restore, double-click leads rows, per-column filters. Backend: 16/16 pytest passing in /app/backend/tests/test_iter7_new_features.py. Frontend: verified via Playwright — new 'Next month' tab (period-next-month) active by default, label='August 2026' (matches next calendar month, current=Jul 2026); Plan Brochures sidebar link visible to both owner & agent; owner-only Add carrier button; carrier create+delete works end-to-end via UI; per-column filter icons (filter-city, filter-state, filter-county, filter-provider) present in Leads header; single-click on a row does NOT navigate, double-click DOES navigate to /leads/{id}; quick-status dropdown click does not navigate (stopPropagation works); browser Back returns to /leads cleanly.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      { "screen": "PlanBrochures Add carrier & Add plan dialogs", "issues": ["Radix DialogContent aria-describedby warning again — same a11y nit as prior iteration; add <DialogDescription> for cleanliness."] }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter7_new_features.py",
+    "/app/test_reports/pytest/iter7_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL a11y: add DialogDescription to carrier-add and plan-add dialogs.",
+    "OPTIONAL: leftover ITER6_Alpha Test lead (assigned to agent2 by iter6 bulk-transfer test) is still in DB — earlier iter6 teardown did not remove it. Consider adding to a global cleanup fixture."
+  ],
+  "critical_code_review_comments": [
+    "server.py:1122 /plans/{pid}/pdf uses StreamingResponse with iter([data]) — buffers entire PDF in memory (up to 15MB per plan). Acceptable at current scale; consider chunked streaming for larger docs.",
+    "server.py:1101 create_plan stores PDF as base64 in Mongo doc — inflates document ~33% and doubles I/O vs GridFS. Fine for <=15MB cap but if plan libraries grow, migrate to GridFS.",
+    "server.py:1971 _period_range next_month arithmetic: total = y*12 + (m-1) + 1 - month_offset; then y2,m2 = total//12, total%12+1 — verified correct (Jul 2026 -> Aug 2026 label).",
+    "server.py:707 list_leads city/zip filters use $regex with ^ anchor — that means the filter is a PREFIX match (case-insensitive for city). Review request said 'starts with', so correct. Just documenting.",
+    "PlanBrochures.jsx uses window.open for PDF blob — works but pop-up blockers may intercept if the fetch is not user-triggered same-tick. Currently the click handler awaits fetch then calls window.open; on some browsers this loses the user-gesture context. Consider using an <a href=blob:...> that is clicked programmatically inside the same tick, or set target on an anchor.",
+    "useScrollRestore uses sessionStorage keyed by pathname+search — good. Note: if the route uses hash-only nav it wouldn't key correctly, but current app uses proper history routing so fine.",
+    "Leads.jsx ColFilter: Popover input has autoFocus — works, but on mobile Safari autoFocus in Popover sometimes fails to open the software keyboard. Non-blocker."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter7_new_features.py (new)"
+  ],
+  "success_rate": { "backend": "100% (16/16 pytest)", "frontend": "100% — every requested feature verified via Playwright" },
+  "test_credentials": "owner@healthexpertscrm.com / Password123!, agent1@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "Backend test seeds ITER7_* leads (3) + ITER7_Humana carrier + a plan with dummy PDF; all cleaned up via fixtures' teardown. UI test also created & deleted a UI_ITER7_Carrier during the run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter7 features fully verified. Re-run backend suite with `pytest backend/tests/test_iter7_new_features.py -o addopts=''` (project pytest.ini has xdist default). Notes: (1) POST /api/carriers/{cid}/plans is multipart/form-data — use requests `files=` with tuple ('name', (None, value)); (2) Leaderboard label is computed at request-time from utcnow, so tests must recompute expected label using same clock; (3) Scroll restore was not explicitly Playwright-tested end-to-end (owner has only 2 leads, no scroll needed) — hook code inspected, back navigation confirmed working. Consider seeding ~30 rows if a formal scroll-position assertion is required.",
+  "rca_of_the_issue": "N/A — feature round, no bugs."
+}

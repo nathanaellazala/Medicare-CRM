@@ -21,6 +21,7 @@ import BookOfBusiness from "@/pages/BookOfBusiness";
 import Appointments from "@/pages/Appointments";
 import SharedLeads from "@/pages/SharedLeads";
 import SharedLeadDetail from "@/pages/SharedLeadDetail";
+import PlanBrochures from "@/pages/PlanBrochures";
 import { Toaster } from "sonner";
 
 function DashboardSwitch() {
@@ -56,6 +57,7 @@ function App() {
             <Route path="/book-of-business" element={<BookOfBusiness />} />
             <Route path="/shared-leads" element={<SharedLeads />} />
             <Route path="/shared-leads/:id" element={<SharedLeadDetail />} />
+            <Route path="/plan-brochures" element={<PlanBrochures />} />
             <Route path="/appointments" element={<Appointments />} />
             <Route path="/resources" element={<Resources />} />
             <Route path="/reports" element={<ProtectedRoute ownerOnly><Reports /></ProtectedRoute>} />

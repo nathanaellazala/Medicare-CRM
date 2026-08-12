@@ -44,9 +44,9 @@ function Movement({ mv, change }) {
 }
 
 export default function Leaderboard() {
-  const [period, setPeriod] = useState("week");
+  const [period, setPeriod] = useState("next_month");
   const [offset, setOffset] = useState(0);
-  const [basis, setBasis] = useState("completed"); // "completed" or "effective"
+  const [basis, setBasis] = useState("effective"); // default: rank by upcoming-month effective dates
   const [data, setData] = useState({ rows: [], label: "" });
 
   useEffect(() => {
@@ -86,7 +86,8 @@ export default function Leaderboard() {
             <TabsList className="bg-slate-100 h-9" data-testid="lb-period-tabs">
               <TabsTrigger value="today" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="period-today">Daily</TabsTrigger>
               <TabsTrigger value="week" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="period-week">Weekly</TabsTrigger>
-              <TabsTrigger value="month" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="period-month">Monthly</TabsTrigger>
+              <TabsTrigger value="month" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="period-month">This month</TabsTrigger>
+              <TabsTrigger value="next_month" className="text-xs px-3 data-[state=active]:bg-white data-[state=active]:text-[#026AA2] data-[state=active]:shadow-sm" data-testid="period-next-month">Next month</TabsTrigger>
             </TabsList>
           </Tabs>
         </div>

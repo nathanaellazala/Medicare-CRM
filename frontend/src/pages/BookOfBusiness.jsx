@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CheckCircle2, Search, ChevronRight, Download, Upload, Award, Calendar as CalIcon, User as UserIcon, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { useScrollRestore } from "@/lib/useScrollRestore";
 
 function formatDateShort(iso) {
   if (!iso) return "—";
@@ -88,6 +89,8 @@ export default function BookOfBusiness() {
     return () => clearTimeout(t);
     // eslint-disable-next-line
   }, [q, effFrom, effTo, sort]);
+
+  useScrollRestore("book-of-business", !loading);
 
   const toggleSort = (key) => {
     const asc = `${key}_asc`, desc = `${key}_desc`;
@@ -286,9 +289,10 @@ export default function BookOfBusiness() {
               )}
               {!loading && items.map((lead) => (
                 <tr key={lead.id}
-                    className="cursor-pointer"
+                    className="cursor-pointer select-text"
                     data-testid={`bob-row-${lead.id}`}
-                    onClick={() => navigate(`/leads/${lead.id}`)}>
+                    title="Double-click to open profile"
+                    onDoubleClick={() => navigate(`/leads/${lead.id}`)}>
                   {isOwner && (
                     <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <Checkbox

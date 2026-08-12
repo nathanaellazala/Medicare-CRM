@@ -9,6 +9,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import StatusBadge from "@/components/StatusBadge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useScrollRestore } from "@/lib/useScrollRestore";
 import { Search, Filter, Download, Shuffle, ChevronRight, RefreshCw, Trash2, Radio } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -30,6 +32,12 @@ export default function Leads() {
   const [sort, setSort] = useState(params.get("sort") || "updated_desc");
   const [sortCol, setSortCol] = useState(params.get("sortCol") || "");
   const [sortDir, setSortDir] = useState(params.get("sortDir") || "");
+  // Per-column server-side filters
+  const [colCity, setColCity] = useState(params.get("city") || "");
+  const [colZip, setColZip] = useState(params.get("zip_code") || "");
+  const [colState, setColState] = useState(params.get("state") || "");
+  const [colCounty, setColCounty] = useState(params.get("county") || "");
+  const [colProvider, setColProvider] = useState(params.get("medicaid_provider") || "");
   const [statuses, setStatuses] = useState([]);
   const [agents, setAgents] = useState([]);
   const [selected, setSelected] = useState({});
@@ -96,6 +104,11 @@ export default function Leads() {
       if (agentFilter && isOwner) qs.agent_id = agentFilter;
       if (leadType) qs.lead_type = leadType;
       if (sort) qs.sort = sort;
+      if (colCity) qs.city = colCity;
+      if (colZip) qs.zip_code = colZip;
+      if (colState) qs.state = colState;
+      if (colCounty) qs.county = colCounty;
+      if (colProvider) qs.medicaid_provider = colProvider;
       const { data } = await api.get("/leads", { params: qs });
       // Hide "Complete" leads by default — they live in Book of Business.
       // Only include them if the user explicitly filtered by "Complete".
@@ -136,7 +149,9 @@ export default function Leads() {
     if (isOwner) api.get("/users").then((r) => setAgents(r.data.filter((u) => u.role === "agent"))).catch(() => {});
   }, [isOwner]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [status, agentFilter, leadType, sort]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [status, agentFilter, leadType, sort, colCity, colZip, colState, colCounty, colProvider]);
+
+  useScrollRestore(isOwner ? "leads-owner" : "leads-agent", !loading);
 
   useEffect(() => {
     const handler = setTimeout(() => load(), 250);
@@ -368,12 +383,22 @@ export default function Leads() {
                 <th onClick={() => toggleSort("full_name")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Name{sortSuffix("full_name")}</th>
                 <th className="px-4 py-3">Phone</th>
                 <th onClick={() => toggleSort("birthdate")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Birthdate{sortSuffix("birthdate")}</th>
-                <th onClick={() => toggleSort("county")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">County{sortSuffix("county")}</th>
-                <th className="px-4 py-3">City / State</th>
+                <th className="px-4 py-3">
+                  <span onClick={() => toggleSort("county")} className="cursor-pointer select-none hover:text-[#026AA2]">County{sortSuffix("county")}</span>
+                  <ColFilter label="County" value={colCounty} setValue={setColCounty} testId="filter-county"/>
+                </th>
+                <th className="px-4 py-3">
+                  <span>City / State</span>
+                  <ColFilter label="City" value={colCity} setValue={setColCity} testId="filter-city"/>
+                  <ColFilter label="State" value={colState} setValue={setColState} placeholder="e.g. NY" testId="filter-state"/>
+                </th>
                 <th className="px-4 py-3">Type</th>
                 <th onClick={() => toggleSort("lead_status")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Status{sortSuffix("lead_status")}</th>
                 {isOwner && <th className="px-4 py-3">Agent</th>}
-                <th onClick={() => toggleSort("medicaid_provider")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Provider{sortSuffix("medicaid_provider")}</th>
+                <th className="px-4 py-3">
+                  <span onClick={() => toggleSort("medicaid_provider")} className="cursor-pointer select-none hover:text-[#026AA2]">Provider{sortSuffix("medicaid_provider")}</span>
+                  <ColFilter label="Provider" value={colProvider} setValue={setColProvider} testId="filter-provider"/>
+                </th>
                 <th onClick={() => toggleSort("updated_at")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Updated{sortSuffix("updated_at")}</th>
                 <th className="px-4 py-3 w-10"></th>
               </tr>
@@ -386,8 +411,13 @@ export default function Leads() {
                 <tr><td colSpan={isOwner ? 11 : 10} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
               )}
               {!loading && sortedItems.map((lead) => (
-                <tr key={lead.id} className="cursor-pointer" data-testid={`lead-row-${lead.id}`}
-                    onClick={() => navigate(`/leads/${lead.id}`)}>
+                <tr
+                  key={lead.id}
+                  className="cursor-pointer select-text"
+                  data-testid={`lead-row-${lead.id}`}
+                  onDoubleClick={() => navigate(`/leads/${lead.id}`)}
+                  title="Double-click to open profile"
+                >
                   {isOwner && (
                     <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <Checkbox
@@ -505,5 +535,44 @@ export default function Leads() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function ColFilter({ label, value, setValue, placeholder, testId }) {
+  const [draft, setDraft] = React.useState(value || "");
+  React.useEffect(() => { setDraft(value || ""); }, [value]);
+  const active = !!value;
+  const apply = () => setValue(draft.trim());
+  const clear = () => { setDraft(""); setValue(""); };
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          className={`ml-1.5 inline-flex items-center rounded p-0.5 hover:bg-slate-100 ${active ? "text-[#026AA2]" : "text-slate-400"}`}
+          data-testid={testId}
+          title={active ? `Filtered: ${value}` : `Filter ${label}`}
+        >
+          <Filter size={11} className={active ? "fill-current" : ""}/>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-3">
+        <div className="text-xs text-slate-500 uppercase tracking-wider mb-1.5">Filter by {label}</div>
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && apply()}
+          placeholder={placeholder || `e.g. ${label}`}
+          className="h-8 text-sm"
+          data-testid={`${testId}-input`}
+          autoFocus
+        />
+        <div className="flex gap-1.5 mt-2">
+          <Button onClick={apply} className="h-7 text-xs text-white flex-1" style={{ background: "#026AA2" }} data-testid={`${testId}-apply`}>Apply</Button>
+          <Button onClick={clear} className="h-7 text-xs bg-white border border-slate-300 text-slate-700 hover:bg-slate-50" data-testid={`${testId}-clear`}>Clear</Button>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
