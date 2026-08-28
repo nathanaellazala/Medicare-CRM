@@ -1,0 +1,33 @@
+{
+  "summary": "Targeted re-verification of the scroll-restore fix (useScrollRestore now targets main.scrollTop). Test FAILED on /leads: after Back, main.scrollTop is 0 (expected ~800). Root cause is NOT the getScrollEl() change — that part is correct. The real bug is WHEN the save happens: cleanup runs after React has already swapped Leads for the LeadDetail component inside <main>, so <main>'s scrollHeight collapses and the browser clamps scrollTop to 0 BEFORE save() reads it. Instrumentation proved this: a scroll event to 0 fires at ~433ms after dblclick, and sessionStorage['scroll:leads-owner:/leads'] is written as '0'. /book-of-business and /shared-leads had insufficient content in this workspace (scrollHeight <= clientHeight) and were skipped. Regressions were not re-tested per the request (only scroll test was asked).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "useScrollRestore hook",
+        "issue": "Scroll position not restored on Back from /leads/:id -> /leads. main.scrollTop stays 0 instead of ~800. sessionStorage stores '0' at the time of navigation because <main> content shrinks (Leads list -> LeadDetail) causing the browser to clamp scrollTop to 0 before the useEffect cleanup save() runs. The fix from iter8 (querying main instead of window) is correct in isolation, but the save timing is wrong.",
+        "selector": "document.querySelector('main').scrollTop",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Fix useScrollRestore save timing: DO NOT rely on useEffect cleanup to read main.scrollTop at unmount — by then React has already swapped in the detail page and the browser has clamped scrollTop to 0. Instead: (a) attach a passive 'scroll' listener on the main element that continuously writes the latest scrollTop into sessionStorage (throttled), OR (b) keep a ref updated on every scroll and write ref.current in the cleanup, OR (c) save() from the row's onDoubleClick handler synchronously before router.push. Option (a) is cleanest and requires ~5 lines.",
+    "After fixing, re-verify with: goto /leads → set main.scrollTop=800 → dblclick row → wait → go_back → wait 800ms → assert main.scrollTop within 800±30. Regression tests (Medicare/Medicaid copy, transfer wipe, per-agent masking) can be re-run once scroll fix is in."
+  ],
+  "critical_code_review_comments": [
+    "useScrollRestore.js line 42-52: save() reads scrollTop in the cleanup, which fires AFTER React commits new DOM. Since <main> persists but its child changes, scrollTop is already 0 at cleanup time. Need a scroll listener that mirrors scrollTop to a ref/storage during the list's lifetime.",
+    "Also consider: the beforeunload save is fine, but the more common path (client-side nav) is unhandled correctly.",
+    "Minor: sessionStorage['scroll:leads-owner:/leads'] was already present as '0' on fresh mount (likely StrictMode double-invoke cleanup writing 0). A scroll-listener-based approach would naturally overwrite this with the real value."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "0% (1/1 scroll test failed)"},
+  "seed_data_creation": "None — used existing ITER8Scroll* leads (~43 rows, 2701px scrollHeight). /book-of-business and /shared-leads have insufficient content (1 row each) to test scroll restoration.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Owner login: owner@healthexpertscrm.com / Password123!. /leads has 46 leads with 2701px scrollHeight. Verified pattern: set main.scrollTop=800, dblclick middle cell of tbody row (avoid copy buttons), wait ~2s for nav, go_back, wait 800ms, assert main.scrollTop ~= 800. Instrumentation snippet: attach scroll listener on main to log scrollTop timeline — proved browser clamps scrollTop to 0 at ~433ms after dblclick when detail page mounts and shrinks <main>'s content.",
+  "rca of the issue": "REPRODUCTION: login as owner → /leads → main.scrollTop=800 → dblclick row (navigates to /leads/:id) → go_back. EXPECTED main.scrollTop≈800 after Back. ACTUAL: 0. ROOT CAUSE: <main class='overflow-y-auto'> in Layout.jsx persists across route changes, but its child swaps from the tall Leads list (scrollHeight=2701) to a short LeadDetail (scrollHeight≈clientHeight). The browser automatically clamps scrollTop to max(0, scrollHeight-clientHeight)=0 the moment the DOM commit shrinks the content. React runs effect cleanups AFTER the DOM commit, so useScrollRestore's cleanup save() reads scrollTop=0 and persists '0' to sessionStorage. On Back, the hook restores '0' correctly. MITIGATION: mirror scrollTop into a ref (or sessionStorage) via a passive scroll listener during the list's mount lifetime; write ref.current in cleanup (or don't rely on cleanup at all — the listener already keeps sessionStorage fresh)."
+}

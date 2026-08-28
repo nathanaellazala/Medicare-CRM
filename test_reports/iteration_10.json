@@ -1,0 +1,26 @@
+{
+  "summary": "Full E2E verification of the 7 requested improvements — universal lead search, filter persistence in URL, back-nav preserves filters (no reload), Complete-status plan dialog, Add/Change enrolled plan dialog, appointment NOT cleared on status change, and Call tel: button in LeadDetail. Backend: 10/10 pytest tests pass (search by zip/address/state/provider/medicare_parts; PATCH lead_status=Complete saves enrolled_carrier+enrolled_plan+effective_date; PATCH plan without changing status; appt survives non-reassignment status change; reassignment clears appt+plan as intended; /api/carriers). Frontend Playwright: filters (status, city) reflected in URL; back nav from /leads/:id returns to /leads?status=Uncalled with filter still applied; Complete dialog auto-opens with carrier+plan+freetext-fallback+save; edit-plan dialog opens; quick-status Complete on list row redirects to /leads/{id}?complete=1 and auto-opens dialog; Call button renders as <a href='tel:...'> only when phone present; setting Appointment Set stores appt, subsequent change to 'No Answer' preserves appt-badge with '· scheduled' suffix. Scroll-restore behavior from iter9 was NOT re-tested (out of scope for this iteration's feature request).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter10_features.py",
+    "/app/test_reports/pytest/iter10.xml"
+  ],
+  "action_items": [
+    "None for the requested feature set — all 7 improvements verified working. Scroll-restore issue from iter9 was NOT retested per scope; if user still sees list scroll to 0 on Back, revisit useScrollRestore save timing (see iter9 report)."
+  ],
+  "critical_code_review_comments": [
+    "Leads.jsx line 121-128: after fetching, list is client-filtered to hide 'Complete' unless status==='Complete'. total is set to filtered.length which is misleading if backend total was larger (paged). OK for now since no pagination in UI, but worth noting.",
+    "LeadDetail.jsx savePlanEdit sends enrolled_carrier=null when empty which is fine; server LeadUpdateIn accepts Optional[str]=None so persistence works. Confirmed via GET.",
+    "server.py line 749-771: q-search is a broad OR of many regex fields. For large collections this may be slow — consider a compound text index on the searchable fields.",
+    "server.py line 878-891: reassignment wipes appointment_at and enrolled_carrier/enrolled_plan. This matches spec (reassignment is the only status change that clears appt)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter10_features.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "100% (7/7 flows)"},
+  "test_credentials": "owner@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "test_iter10_features.py creates ITER10 Search/Appt/Reassign leads and deletes them in fixture teardown. No orphan test data left behind.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter10 fully validates the 7 improvements from the review. Backend pytest suite at /app/backend/tests/test_iter10_features.py is idempotent and can be re-run. Frontend test lead used: dbb29e55-4ef7-4464-9a90-437f0844858c (ITER8Xfer Case) — its status was flipped from Uncalled → Appointment Set → No Answer during the run; badge with 'scheduled' suffix is present. The scroll-restore concern reported in iter9 was NOT retested; that hook was rewritten to use a passive scroll listener + sessionStorage which should have fixed the clamping issue, but no explicit scroll-position assertion was performed this iteration.",
+  "rca of the issue": "N/A — no bugs found for the requested feature set."
+}

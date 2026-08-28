@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api, formatApiError, formatBirthdate } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Card } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import StatusBadge from "@/components/StatusBadge";
 import ApplicationInfo from "@/pages/ApplicationInfo";
-import { ArrowLeft, Phone, Copy, Plus, PhoneCall, Pin, ClipboardEdit, History, FileText, User, Calendar, Trash2 } from "lucide-react";
+import { ArrowLeft, Phone, Copy, Plus, PhoneCall, Pin, ClipboardEdit, History, FileText, User, Calendar, Trash2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 function Field({ label, value, copyable }) {
@@ -41,9 +41,11 @@ export default function LeadDetail() {
   const { id } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [lead, setLead] = useState(null);
   const [statuses, setStatuses] = useState([]);
   const [agents, setAgents] = useState([]);
+  const [carriers, setCarriers] = useState([]);
   const [activity, setActivity] = useState([]);
   const [notes, setNotes] = useState([]);
   const [calls, setCalls] = useState([]);
@@ -53,18 +55,25 @@ export default function LeadDetail() {
   const [callForm, setCallForm] = useState({ call_result: "", notes: "", follow_up_date: "", duration: "" });
   const [openAppt, setOpenAppt] = useState(false);
   const [apptForm, setApptForm] = useState({ date: "", time: "" });
+  // Complete flow: pick the plan the member enrolled in
+  const [openComplete, setOpenComplete] = useState(false);
+  const [completeForm, setCompleteForm] = useState({ enrolled_carrier: "", enrolled_plan: "", effective_date: "" });
+  // Edit-plan flow (for changing an already-set plan)
+  const [openEditPlan, setOpenEditPlan] = useState(false);
+  const [editPlanForm, setEditPlanForm] = useState({ enrolled_carrier: "", enrolled_plan: "" });
 
   const isOwner = user?.role === "owner";
 
   const load = async () => {
     try {
-      const [l, s, c, n, ac, cr] = await Promise.all([
+      const [l, s, c, n, ac, cr, ca] = await Promise.all([
         api.get(`/leads/${id}`),
         api.get("/statuses"),
         api.get(`/leads/${id}/call-logs`),
         api.get(`/leads/${id}/notes`),
         api.get(`/leads/${id}/activity`),
         api.get(`/constants/call-results`),
+        api.get("/carriers"),
       ]);
       setLead(l.data);
       setStatuses(s.data);
@@ -72,6 +81,7 @@ export default function LeadDetail() {
       setNotes(n.data);
       setActivity(ac.data);
       setCallResults(cr.data);
+      setCarriers(ca.data || []);
       if (isOwner) {
         const u = await api.get("/users");
         setAgents(u.data.filter((x) => x.role === "agent"));
@@ -83,12 +93,33 @@ export default function LeadDetail() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
 
+  // If we were sent here with ?complete=1 (from the list quick-status), open
+  // the Complete dialog once the lead has loaded.
+  useEffect(() => {
+    if (!lead) return;
+    if (searchParams.get("complete") === "1") {
+      setCompleteForm({
+        enrolled_carrier: lead.enrolled_carrier || "",
+        enrolled_plan: lead.enrolled_plan || "",
+        effective_date: lead.effective_date || "",
+      });
+      setOpenComplete(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete("complete");
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line
+  }, [lead?.id]);
+
   if (!lead) return <div className="p-8 text-sm text-slate-500">Loading...</div>;
+
+  const carrierNames = carriers.map((c) => c.name).filter(Boolean);
+  const plansForSelectedCarrier = (name) =>
+    (carriers.find((c) => c.name === name)?.plans || []).map((p) => p.name).filter(Boolean);
 
   const updateField = async (field, value) => {
     // Special-case Appointment Set: prompt for date/time
     if (field === "lead_status" && value === "Appointment Set") {
-      // Prefill with existing appointment if present, otherwise +1 day at 10:00
       const existing = lead?.appointment_at ? new Date(lead.appointment_at) : null;
       const base = existing || (() => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0); return d; })();
       setApptForm({
@@ -96,6 +127,16 @@ export default function LeadDetail() {
         time: base.toTimeString().slice(0, 5),
       });
       setOpenAppt(true);
+      return;
+    }
+    // Special-case Complete: ask which plan the member enrolled in
+    if (field === "lead_status" && value === "Complete") {
+      setCompleteForm({
+        enrolled_carrier: lead.enrolled_carrier || "",
+        enrolled_plan: lead.enrolled_plan || "",
+        effective_date: lead.effective_date || "",
+      });
+      setOpenComplete(true);
       return;
     }
     // Reassignment warning — deletes all history for the receiving agent
@@ -128,6 +169,37 @@ export default function LeadDetail() {
       setOpenAppt(false);
       load();
       toast.success(`Appointment set for ${new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`);
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const saveComplete = async () => {
+    if (!completeForm.enrolled_carrier || !completeForm.enrolled_plan) {
+      toast.error("Choose the carrier and plan the member enrolled in");
+      return;
+    }
+    try {
+      const { data } = await api.patch(`/leads/${id}`, {
+        lead_status: "Complete",
+        enrolled_carrier: completeForm.enrolled_carrier,
+        enrolled_plan: completeForm.enrolled_plan,
+        effective_date: completeForm.effective_date || null,
+      });
+      setLead(data);
+      setOpenComplete(false);
+      load();
+      toast.success("Marked complete");
+    } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
+  };
+
+  const savePlanEdit = async () => {
+    try {
+      const { data } = await api.patch(`/leads/${id}`, {
+        enrolled_carrier: editPlanForm.enrolled_carrier || null,
+        enrolled_plan: editPlanForm.enrolled_plan || null,
+      });
+      setLead(data);
+      setOpenEditPlan(false);
+      toast.success("Plan updated");
     } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); }
   };
 
@@ -192,10 +264,13 @@ export default function LeadDetail() {
               </h1>
               <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                 <StatusBadge status={lead.lead_status} />
-                {lead.appointment_at && lead.lead_status === "Appointment Set" && (
+                {lead.appointment_at && (
                   <span className="inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full bg-purple-50 text-purple-800 border border-purple-200 font-medium" data-testid="appt-badge">
                     <Calendar size={11}/>
                     {new Date(lead.appointment_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    {lead.lead_status !== "Appointment Set" && (
+                      <span className="text-purple-500 font-normal ml-0.5">· scheduled</span>
+                    )}
                   </span>
                 )}
                 {lead.is_duplicate && (
@@ -207,7 +282,17 @@ export default function LeadDetail() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {lead.phone_number && (
+              <a
+                href={`tel:${lead.phone_number.replace(/[^\d+]/g, "")}`}
+                className="inline-flex items-center h-9 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors"
+                data-testid="lead-call-button"
+                title={`Call ${lead.phone_number}`}
+              >
+                <Phone size={14} className="mr-1.5"/> Call
+              </a>
+            )}
             <Select value={lead.lead_type || "New to Medicare"} onValueChange={(v) => updateField("lead_type", v)}>
               <SelectTrigger className="h-9 w-40" data-testid="lead-type-select"><SelectValue/></SelectTrigger>
               <SelectContent>
@@ -303,6 +388,120 @@ export default function LeadDetail() {
         </DialogContent>
       </Dialog>
 
+      {/* Complete → pick enrolled plan */}
+      <Dialog open={openComplete} onOpenChange={setOpenComplete}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Which plan did the member enroll in?</DialogTitle></DialogHeader>
+          <p className="text-xs text-slate-500 -mt-2">Record the carrier and plan before marking this lead complete.</p>
+          <div className="space-y-3 mt-2">
+            <div>
+              <Label className="text-xs">Carrier</Label>
+              <Select
+                value={completeForm.enrolled_carrier || undefined}
+                onValueChange={(v) => setCompleteForm({ ...completeForm, enrolled_carrier: v, enrolled_plan: "" })}
+              >
+                <SelectTrigger className="mt-1.5" data-testid="complete-carrier"><SelectValue placeholder="Choose carrier..."/></SelectTrigger>
+                <SelectContent>
+                  {carrierNames.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {carrierNames.length === 0 && (
+                <div className="text-[11px] text-amber-700 mt-1">No carriers set up yet — type the plan name below.</div>
+              )}
+            </div>
+            <div>
+              <Label className="text-xs">Plan</Label>
+              {plansForSelectedCarrier(completeForm.enrolled_carrier).length > 0 ? (
+                <Select
+                  value={completeForm.enrolled_plan || undefined}
+                  onValueChange={(v) => setCompleteForm({ ...completeForm, enrolled_plan: v })}
+                >
+                  <SelectTrigger className="mt-1.5" data-testid="complete-plan"><SelectValue placeholder="Choose plan..."/></SelectTrigger>
+                  <SelectContent>
+                    {plansForSelectedCarrier(completeForm.enrolled_carrier).map((n) => (
+                      <SelectItem key={n} value={n}>{n}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  value={completeForm.enrolled_plan}
+                  onChange={(e) => setCompleteForm({ ...completeForm, enrolled_plan: e.target.value })}
+                  placeholder="e.g. Silver Advantage HMO"
+                  className="mt-1.5"
+                  data-testid="complete-plan-freetext"
+                />
+              )}
+            </div>
+            <div>
+              <Label className="text-xs">Effective date (optional)</Label>
+              <Input
+                type="date"
+                value={completeForm.effective_date}
+                onChange={(e) => setCompleteForm({ ...completeForm, effective_date: e.target.value })}
+                className="mt-1.5"
+                data-testid="complete-effective"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setOpenComplete(false)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</Button>
+            <Button onClick={saveComplete} className="text-white" style={{ background: "#026AA2" }} data-testid="complete-save">
+              <CheckCircle2 size={13} className="mr-1.5"/> Mark complete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit plan (change plan after it was set) */}
+      <Dialog open={openEditPlan} onOpenChange={setOpenEditPlan}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Change enrolled plan</DialogTitle></DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div>
+              <Label className="text-xs">Carrier</Label>
+              <Select
+                value={editPlanForm.enrolled_carrier || undefined}
+                onValueChange={(v) => setEditPlanForm({ ...editPlanForm, enrolled_carrier: v, enrolled_plan: "" })}
+              >
+                <SelectTrigger className="mt-1.5" data-testid="edit-plan-carrier"><SelectValue placeholder="Choose carrier..."/></SelectTrigger>
+                <SelectContent>
+                  {carrierNames.map((n) => <SelectItem key={n} value={n}>{n}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Plan</Label>
+              {plansForSelectedCarrier(editPlanForm.enrolled_carrier).length > 0 ? (
+                <Select
+                  value={editPlanForm.enrolled_plan || undefined}
+                  onValueChange={(v) => setEditPlanForm({ ...editPlanForm, enrolled_plan: v })}
+                >
+                  <SelectTrigger className="mt-1.5" data-testid="edit-plan-plan"><SelectValue placeholder="Choose plan..."/></SelectTrigger>
+                  <SelectContent>
+                    {plansForSelectedCarrier(editPlanForm.enrolled_carrier).map((n) => (
+                      <SelectItem key={n} value={n}>{n}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  value={editPlanForm.enrolled_plan}
+                  onChange={(e) => setEditPlanForm({ ...editPlanForm, enrolled_plan: e.target.value })}
+                  placeholder="e.g. Silver Advantage HMO"
+                  className="mt-1.5"
+                  data-testid="edit-plan-freetext"
+                />
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setOpenEditPlan(false)} className="bg-white border border-slate-300 text-slate-700 hover:bg-slate-50">Cancel</Button>
+            <Button onClick={savePlanEdit} className="text-white" style={{ background: "#026AA2" }} data-testid="edit-plan-save">Save plan</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Overview */}
         <Card className="p-5 lg:col-span-1 border-slate-200 rounded-md shadow-sm">
@@ -325,6 +524,38 @@ export default function LeadDetail() {
             <Field label="Medicaid Provider" value={lead.medicaid_provider}/>
             <Field label="Medicare Parts" value={lead.medicare_parts}/>
           </div>
+
+          {/* Enrolled plan — always editable */}
+          <div className="border-t border-slate-100 pt-4 mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">Enrolled Plan</div>
+              <button
+                onClick={() => {
+                  setEditPlanForm({
+                    enrolled_carrier: lead.enrolled_carrier || "",
+                    enrolled_plan: lead.enrolled_plan || "",
+                  });
+                  setOpenEditPlan(true);
+                }}
+                className="text-xs text-[#026AA2] hover:underline"
+                data-testid="edit-plan-open"
+              >
+                {lead.enrolled_plan || lead.enrolled_carrier ? "Change plan" : "Add plan"}
+              </button>
+            </div>
+            <div className="text-sm text-slate-900 font-medium" data-testid="lead-enrolled-plan">
+              {lead.enrolled_carrier || lead.enrolled_plan ? (
+                <>
+                  <span>{lead.enrolled_carrier || "—"}</span>
+                  {lead.enrolled_plan && <span className="text-slate-500"> · </span>}
+                  <span>{lead.enrolled_plan || ""}</span>
+                </>
+              ) : (
+                <span className="text-slate-400">Not selected</span>
+              )}
+            </div>
+          </div>
+
           <div className="border-t border-slate-100 pt-4 mt-4 space-y-2">
             <div>
               <div className="text-xs text-slate-500 uppercase tracking-wide mb-1">Effective Date</div>

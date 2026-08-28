@@ -1,0 +1,39 @@
+{
+  "summary": "Iter8 re-verification of 4 items. Backend: 6/6 pytest passing — (a) transfer reset wipes notes/call_logs and resets lead_status→Uncalled + appointment_at/effective_date/completed_at cleared; (b) per-agent visible_fields masks medicare_number/medicaid_number to empty strings when keys removed and re-appears when re-added; (c) per-column filters (city/state/zip) regress-clean; (d) leaderboard endpoint 200. Frontend (owner): Medicare # and Medicaid # column headers render, 43/46 rows have copy-mcare-{id} & copy-mcaid-{id} buttons, clipboard.writeText fires with correct value, icon swaps Copy→Check→Copy (~1.2s), row onDoubleClick NOT triggered by copy click (URL unchanged). CRITICAL BUG FOUND on scroll restore: the app's scroll container is <main class='overflow-y-auto'> (Layout.jsx:288), NOT window. useScrollRestore.js reads window.scrollY (always 0) and calls window.scrollTo (no-op). Saved value = 0; after back nav main.scrollTop = 0. Scroll restore is effectively a no-op for the entire app.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "useScrollRestore hook (/app/frontend/src/lib/useScrollRestore.js)",
+        "issue": "Uses window.scrollY / window.scrollTo but the real scroll container is the <main> element in Layout.jsx (has overflow-y-auto, h-screen parent). Result: sessionStorage always saves '0' and restore is a no-op. Verified: main.scrollHeight=3284, main.clientHeight=736, but window doc height=800 and window.scrollY stays 0 even after scrolling. After dblclick→back the main.scrollTop returns to 0 regardless of pre-nav position.",
+        "selector": "main[class*='overflow-y-auto']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter8_verify.py",
+    "/app/test_reports/pytest/iter8_results.xml"
+  ],
+  "action_items": [
+    "Fix useScrollRestore to target the actual scroll container (<main>). Two options: (1) accept a ref/selector param and use el.scrollTop / el.scrollTo; or (2) auto-detect: pick the nearest ancestor with overflow-y auto/scroll (walk up from document.querySelector('main')). Add listener to that element's 'scroll' event or read el.scrollTop in the save cleanup. Also disable browser scrollRestoration remains fine.",
+    "After fix, verify with Playwright: set main.scrollTop=800, dblclick row → back → expect main.scrollTop≈800 (±30px)."
+  ],
+  "critical_code_review_comments": [
+    "Layout.jsx makes <main> the scroll container (overflow-y-auto with h-screen root). Any global scroll-restore/'scroll-to-top on route change' logic must target that element, not window.",
+    "CopyButton correctly calls e.stopPropagation() + e.preventDefault() on onClick and stops onDoubleClick propagation — confirmed working (row dblclick not fired by copy click).",
+    "server.py lead-transfer wipe on assigned_agent_id change is idempotent and correctly clears notes/call_logs/appointment_at/effective_date/completed_at and resets lead_status → 'Uncalled'. Verified end-to-end.",
+    "mask_lead_for_user honors visible_fields for medicare_number/medicaid_number by returning empty string (not None), which lets the frontend treat missing values cleanly — CopyButton also handles empty string by returning null so no orphan icon renders.",
+    "Leads.jsx colSpan calculation for loading/empty rows correctly adds +1 per showMedicare/showMedicaid — good."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter8_verify.py"],
+  "success_rate": { "backend": "100% (6/6 pytest)", "frontend": "75% — copy buttons + column gating verified; scroll restore BROKEN due to wrong scroll container" },
+  "test_credentials": "owner@healthexpertscrm.com / Password123!, agent1@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "Seeded ~43 ITER8Scroll* leads assigned to agent1 to make the list scrollable (main.scrollHeight ~3284px). Not cleaned up — reuse for future scroll tests or bulk-delete by name prefix.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "After main agent fixes useScrollRestore to target <main>, re-verify: (1) navigate to /leads as owner, (2) set document.querySelector('main').scrollTop=800, (3) dblclick any row (avoid copy button cells), (4) page.go_back(), (5) wait ~800ms for RAF restore + list refetch, (6) assert main.scrollTop within ±30 of 800. Do NOT rely on window.scrollY — it's always 0 in this layout. Backend tests remain green: pytest backend/tests/test_iter8_verify.py -o addopts=''.",
+  "rca_of_the_issue": "useScrollRestore hook assumes the document (window) is the scroll container, which is a valid default for most SPAs. However, this app's Layout.jsx wraps content in <div class='flex h-screen overflow-hidden'> and puts <main class='flex-1 overflow-y-auto'> as the scroll container. Consequently window.scrollY is always 0 and window.scrollTo is a no-op. Fix: parametrize the hook with a getter (e.g., () => document.querySelector('main')) or export a helper that reads/writes el.scrollTop. Reproduction: /leads as owner with >=15 leads → scroll list → dblclick row → back → observe main.scrollTop resets to 0."
+}

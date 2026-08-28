@@ -10,7 +10,8 @@ import {
 } from "@/components/ui/select";
 import StatusBadge from "@/components/StatusBadge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useScrollRestore } from "@/lib/useScrollRestore";
+import { useScrollRestore, useListCache } from "@/lib/useScrollRestore";
+import { CopyButton } from "@/components/CopyButton";
 import { Search, Filter, Download, Shuffle, ChevronRight, RefreshCw, Trash2, Radio } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -22,9 +23,11 @@ export default function Leads() {
   const isOwner = user?.role === "owner";
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const [items, setItems] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const cache = useListCache(isOwner ? "leads-owner" : "leads-agent");
+  const initialCache = React.useMemo(() => cache.getCached(), []); // eslint-disable-line
+  const [items, setItems] = useState(initialCache?.items || []);
+  const [total, setTotal] = useState(initialCache?.total ?? 0);
+  const [loading, setLoading] = useState(!initialCache);
   const [q, setQ] = useState(params.get("q") || "");
   const [status, setStatus] = useState(params.get("status") || "");
   const [agentFilter, setAgentFilter] = useState(params.get("agent_id") || "");
@@ -55,9 +58,14 @@ export default function Leads() {
     if (leadType) next.set("lead_type", leadType);
     if (sort && sort !== "updated_desc") next.set("sort", sort);
     if (sortCol) { next.set("sortCol", sortCol); next.set("sortDir", sortDir); }
+    if (colCity) next.set("city", colCity);
+    if (colZip) next.set("zip_code", colZip);
+    if (colState) next.set("state", colState);
+    if (colCounty) next.set("county", colCounty);
+    if (colProvider) next.set("medicaid_provider", colProvider);
     setParams(next, { replace: true });
     // eslint-disable-next-line
-  }, [q, status, agentFilter, leadType, sort, sortCol, sortDir]);
+  }, [q, status, agentFilter, leadType, sort, sortCol, sortDir, colCity, colZip, colState, colCounty, colProvider]);
 
   const toggleSort = (col) => {
     if (sortCol !== col) { setSortCol(col); setSortDir("asc"); return; }
@@ -95,8 +103,9 @@ export default function Leads() {
 
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (opts = {}) => {
+    const { silent = false } = opts;
+    if (!silent) setLoading(true);
     try {
       const qs = {};
       if (q) qs.q = q;
@@ -117,6 +126,7 @@ export default function Leads() {
         : data.items.filter((l) => l.lead_status !== "Complete");
       setItems(filtered);
       setTotal(filtered.length);
+      cache.setCached({ items: filtered, total: filtered.length });
     } catch (e) {
       toast.error(formatApiError(e.response?.data?.detail));
     } finally {
@@ -149,11 +159,34 @@ export default function Leads() {
     if (isOwner) api.get("/users").then((r) => setAgents(r.data.filter((u) => u.role === "agent"))).catch(() => {});
   }, [isOwner]);
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [status, agentFilter, leadType, sort, colCity, colZip, colState, colCounty, colProvider]);
+  useEffect(() => {
+    // On mount: if we have cached items, refresh silently in the background
+    // so the list stays visible and the scroll position is preserved.
+    load({ silent: !!initialCache });
+    /* eslint-disable-next-line */
+  }, []);
+
+  useEffect(() => {
+    // Filter/sort changes always show loading — the shape of results is new.
+    load();
+    /* eslint-disable-next-line */
+  }, [status, agentFilter, leadType, sort, colCity, colZip, colState, colCounty, colProvider]);
 
   useScrollRestore(isOwner ? "leads-owner" : "leads-agent", !loading);
 
+  // Whether to render the Medicare / Medicaid columns for the current user.
+  // Owners always see them; agents see them only when the owner has granted
+  // the corresponding field in visible_fields.
+  const vf = user?.visible_fields;
+  const showMedicare = isOwner || !vf || vf.includes("medicare_number");
+  const showMedicaid = isOwner || !vf || vf.includes("medicaid_number");
+
+  const didMountQ = React.useRef(false);
   useEffect(() => {
+    // Skip the very first run — the mount effect already loaded (silently
+    // if we had cache), so we don't want to fire a duplicate load and lose
+    // the restored scroll position.
+    if (!didMountQ.current) { didMountQ.current = true; return; }
     const handler = setTimeout(() => load(), 250);
     return () => clearTimeout(handler);
     // eslint-disable-next-line
@@ -214,19 +247,20 @@ export default function Leads() {
   };
 
   const quickStatus = async (id, newStatus) => {
+    // Complete needs plan selection — send them to the profile.
+    if (newStatus === "Complete") {
+      toast.info("Open the lead to record the enrolled plan.");
+      navigate(`/leads/${id}?complete=1`);
+      return;
+    }
     // Optimistic local update — no full reload, so the agent stays in the
     // same scroll position and their filter/sort state is preserved.
     try {
       const { data: updated } = await api.patch(`/leads/${id}`, { lead_status: newStatus });
       setItems((prev) => {
-        // If the user is not filtering explicitly by "Complete", drop the row
-        // once it turns Complete (it now lives in Book of Business).
-        if (newStatus === "Complete" && status !== "Complete") {
-          const next = prev.filter((l) => l.id !== id);
-          setTotal(next.length);
-          return next;
-        }
-        return prev.map((l) => (l.id === id ? { ...l, ...updated } : l));
+        const next = prev.map((l) => (l.id === id ? { ...l, ...updated } : l));
+        cache.setCached({ items: next, total: next.length });
+        return next;
       });
       toast.success("Status updated");
     } catch (e) {
@@ -279,7 +313,7 @@ export default function Leads() {
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name, phone, county, city..."
+            placeholder="Search name, phone, ZIP, city, county, Medicare/Medicaid #, plan..."
             className="pl-9 h-9"
             data-testid="leads-search"
           />
@@ -399,16 +433,18 @@ export default function Leads() {
                   <span onClick={() => toggleSort("medicaid_provider")} className="cursor-pointer select-none hover:text-[#026AA2]">Provider{sortSuffix("medicaid_provider")}</span>
                   <ColFilter label="Provider" value={colProvider} setValue={setColProvider} testId="filter-provider"/>
                 </th>
+                {showMedicare && <th className="px-4 py-3 whitespace-nowrap">Medicare #</th>}
+                {showMedicaid && <th className="px-4 py-3 whitespace-nowrap">Medicaid #</th>}
                 <th onClick={() => toggleSort("updated_at")} className="px-4 py-3 cursor-pointer select-none hover:text-[#026AA2]">Updated{sortSuffix("updated_at")}</th>
                 <th className="px-4 py-3 w-10"></th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={isOwner ? 11 : 10} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
+                <tr><td colSpan={(isOwner ? 11 : 10) + (showMedicare?1:0) + (showMedicaid?1:0)} className="text-center py-12 text-slate-400 text-sm">Loading...</td></tr>
               )}
               {!loading && sortedItems.length === 0 && (
-                <tr><td colSpan={isOwner ? 11 : 10} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
+                <tr><td colSpan={(isOwner ? 11 : 10) + (showMedicare?1:0) + (showMedicaid?1:0)} className="text-center py-12 text-slate-400 text-sm">No leads found.</td></tr>
               )}
               {!loading && sortedItems.map((lead) => (
                 <tr
@@ -457,6 +493,26 @@ export default function Leads() {
                   </td>
                   {isOwner && <td className="px-4 py-3 text-sm text-slate-700">{agentName(lead.assigned_agent_id)}</td>}
                   <td className="px-4 py-3 text-sm text-slate-700">{lead.medicaid_provider || "—"}</td>
+                  {showMedicare && (
+                    <td className="px-4 py-3 text-sm text-slate-700 font-mono whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      {lead.medicare_number ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span className="select-text">{lead.medicare_number}</span>
+                          <CopyButton value={lead.medicare_number} label="Medicare #" testId={`copy-mcare-${lead.id}`}/>
+                        </span>
+                      ) : <span className="text-slate-400">—</span>}
+                    </td>
+                  )}
+                  {showMedicaid && (
+                    <td className="px-4 py-3 text-sm text-slate-700 font-mono whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      {lead.medicaid_number ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span className="select-text">{lead.medicaid_number}</span>
+                          <CopyButton value={lead.medicaid_number} label="Medicaid #" testId={`copy-mcaid-${lead.id}`}/>
+                        </span>
+                      ) : <span className="text-slate-400">—</span>}
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {lead.updated_at ? new Date(lead.updated_at).toLocaleDateString() : "—"}
                   </td>

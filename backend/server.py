@@ -296,6 +296,8 @@ class LeadIn(BaseModel):
     medicare_number: Optional[str] = ""
     medicaid_provider: Optional[str] = ""
     medicare_parts: Optional[str] = ""
+    enrolled_carrier: Optional[str] = ""
+    enrolled_plan: Optional[str] = ""
     lead_type: Optional[Literal["New to Medicare", "Transfer"]] = "New to Medicare"
     lead_status: Optional[str] = "Uncalled"
     appointment_at: Optional[str] = None
@@ -319,6 +321,8 @@ class LeadUpdateIn(BaseModel):
     medicare_number: Optional[str] = None
     medicaid_provider: Optional[str] = None
     medicare_parts: Optional[str] = None
+    enrolled_carrier: Optional[str] = None
+    enrolled_plan: Optional[str] = None
     lead_type: Optional[Literal["New to Medicare", "Transfer"]] = None
     lead_status: Optional[str] = None
     appointment_at: Optional[str] = None
@@ -744,13 +748,23 @@ async def list_leads(
         f["effective_date"] = ed
     if q:
         normalized = normalize_phone(q)
+        rx = {"$regex": re.escape(q), "$options": "i"}
         or_clauses = [
-            {"full_name": {"$regex": re.escape(q), "$options": "i"}},
-            {"medicare_number": {"$regex": re.escape(q), "$options": "i"}},
-            {"medicaid_number": {"$regex": re.escape(q), "$options": "i"}},
-            {"city": {"$regex": re.escape(q), "$options": "i"}},
-            {"county": {"$regex": re.escape(q), "$options": "i"}},
-            {"lead_status": {"$regex": re.escape(q), "$options": "i"}},
+            {"full_name": rx},
+            {"first_name": rx},
+            {"last_name": rx},
+            {"medicare_number": rx},
+            {"medicaid_number": rx},
+            {"address": rx},
+            {"city": rx},
+            {"state": rx},
+            {"zip_code": rx},
+            {"county": rx},
+            {"lead_status": rx},
+            {"medicaid_provider": rx},
+            {"medicare_parts": rx},
+            {"enrolled_carrier": rx},
+            {"enrolled_plan": rx},
         ]
         if normalized:
             or_clauses.append({"normalized_phone_number": {"$regex": normalized}})
@@ -873,6 +887,8 @@ async def update_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depends(get
         updates["application_info"] = None
         updates["hra_info"] = None
         updates["appointment_at"] = None
+        updates["enrolled_carrier"] = None
+        updates["enrolled_plan"] = None
 
     updates["updated_at"] = now_iso()
     await db.leads.update_one({"_id": lead_id}, {"$set": updates})
@@ -1029,7 +1045,6 @@ async def bulk_delete_leads(body: dict, user: dict = Depends(require_owner)):
 # Plan Brochures — Insurance Carrier → Plan → PDF (owner manages, all view)
 # ============================================================================
 import base64  # noqa: E402
-from fastapi import File, UploadFile, Form  # noqa: E402
 
 
 class CarrierIn(BaseModel):
@@ -1275,11 +1290,17 @@ async def list_shared_leads(
 
     f = {"is_shared": True, "lead_status": {"$ne": "Complete"}}
     if q:
-        f["$or"] = [
-            {"full_name": {"$regex": re.escape(q), "$options": "i"}},
-            {"city": {"$regex": re.escape(q), "$options": "i"}},
-            {"medicaid_provider": {"$regex": re.escape(q), "$options": "i"}},
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        normalized = normalize_phone(q)
+        or_clauses = [
+            {"full_name": rx}, {"first_name": rx}, {"last_name": rx},
+            {"address": rx}, {"city": rx}, {"state": rx}, {"zip_code": rx},
+            {"county": rx}, {"medicaid_provider": rx}, {"medicare_parts": rx},
+            {"medicare_number": rx}, {"medicaid_number": rx},
         ]
+        if normalized:
+            or_clauses.append({"normalized_phone_number": {"$regex": normalized}})
+        f["$or"] = or_clauses
 
     # Sort spec — reuse the same helper the main leads list uses
     sort_map = {
@@ -1651,7 +1672,6 @@ COL_ALIASES = {
     "medicaid provider": "medicaid_provider", "provider": "medicaid_provider", "medicaid plan": "medicaid_provider", "plan": "medicaid_provider",
     "medicare parts": "medicare_parts", "parts": "medicare_parts", "medicare part": "medicare_parts",
     "lead type": "lead_type", "type": "lead_type", "transfer": "lead_type", "t/n": "lead_type",
-    "dob": "birthdate",
     "status": "lead_status", "lead status": "lead_status", "state of lead": "lead_status",
     "effective date": "effective_date", "effective": "effective_date", "coverage effective": "effective_date",
     "start date": "effective_date", "policy effective": "effective_date",

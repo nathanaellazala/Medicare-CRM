@@ -95,3 +95,26 @@ Backend fields retained silently for backward compat with prior imports (no UI s
 - Brute-force lockout & rate limiting on login
 - Notification bell with new-assigned-lead alerts
 - Saved filters, dark mode, pinned-notes UI, import history page
+
+---
+
+## Iteration 10 — Search / Persistence / Plan Selection (Feb 28, 2026)
+Delivered based on user feedback:
+1. **Universal lead search** — `/api/leads?q=` now matches across full_name, first/last, medicare_number, medicaid_number, address, city, state, zip_code, county, lead_status, medicaid_provider, medicare_parts, enrolled_carrier, enrolled_plan, and normalized_phone_number. Same coverage on `/api/shared-leads`. Placeholder updated in Leads.jsx.
+2. **Filters persist across navigation** — every filter (q, status, agent, type, sort, sortCol, sortDir, per-column city/zip/state/county/medicaid_provider) is now synced to the URL. Reads back from URL on mount so navigating back always restores the same view.
+3. **No refresh on Back** — new `useListCache` hook caches items+total in `sessionStorage` per pathname+search. On POP navigation the list paints instantly from cache and refreshes silently in the background — no loading spinner, height doesn't collapse, scroll restore stays accurate.
+4. **Plan selection when marking Complete** — status → Complete now opens a dialog that requires Carrier + Plan (from `/api/carriers`, freetext fallback) and optional effective_date. Saved to new `enrolled_carrier` / `enrolled_plan` fields. Quick-status Complete on the list row navigates to `/leads/{id}?complete=1` which auto-opens the dialog.
+5. **Editable enrolled plan** — LeadDetail shows an Enrolled Plan section with an Add/Change plan link that opens the same picker for post-hoc edits.
+6. **Appointments survive status changes** — appointment_at is only cleared on reassignment. The purple appointment badge now renders whenever `appointment_at` is set (with "· scheduled" suffix when status is not Appointment Set).
+7. **Call button** — LeadDetail header has a green Call button with `tel:` link (sanitized phone number) shown only when phone exists.
+
+**Files touched**
+- `backend/server.py` — q-search or_clauses expanded; LeadIn/LeadUpdateIn get enrolled_carrier/enrolled_plan; reassignment wipe includes both.
+- `frontend/src/lib/useScrollRestore.js` — added `useListCache`; URL search included in scroll key.
+- `frontend/src/pages/Leads.jsx` — cache-first init; silent refresh on mount; per-column filters synced to URL; quickStatus Complete redirects to detail.
+- `frontend/src/pages/LeadDetail.jsx` — Call button; Complete dialog; Change-plan dialog; unconditional appointment badge; ?complete=1 handler.
+
+**Test coverage**
+- Backend: `/app/backend/tests/test_iter10_features.py` — 10/10 pass.
+- Frontend: 7/7 Playwright flows pass (iteration_10.json).
+

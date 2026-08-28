@@ -1,45 +1,95 @@
 import { useEffect, useRef } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigationType } from "react-router-dom";
+
+// The app's Layout uses <main class="overflow-y-auto"> as its scroll container.
+function getScrollEl() {
+  return document.querySelector("main") || document.scrollingElement || document.documentElement;
+}
 
 /**
- * Restore window scroll when returning to a list page (e.g. after opening a
- * lead detail and hitting Back). Stores position in sessionStorage keyed by
- * the current pathname+search, so different filter/sort combinations restore
- * independently.
+ * Preserve list scroll position across a POP navigation (browser Back).
  *
- * Usage:
- *   const { loading } = ...;
- *   useScrollRestore("leads", !loading);
+ * Save: throttled listener on the container's `scroll` event so the latest
+ * scrollTop is already in sessionStorage before the user opens a row.
+ * Restore: on POP, once `ready` is true, set el.scrollTop via two RAFs so the
+ * list has finished measuring.
  */
 export function useScrollRestore(namespace, ready) {
   const location = useLocation();
-  const key = `scroll:${namespace}:${location.pathname}${location.search}`;
+  const navType = useNavigationType();
+  const key = `scroll:${namespace}:${location.pathname}${location.search || ""}`;
   const restored = useRef(false);
 
-  // Restore once data is ready
+  // Kill native scroll restoration
   useEffect(() => {
-    if (!ready || restored.current) return;
-    const saved = sessionStorage.getItem(key);
-    if (saved != null) {
-      // Wait a tick so the newly rendered rows have their real heights
-      requestAnimationFrame(() => {
-        window.scrollTo({ top: Number(saved), behavior: "instant" });
-        restored.current = true;
-      });
-    } else {
-      restored.current = true;
-    }
-    // Reset the guard when the key changes (different filters)
-    return () => { restored.current = false; };
-  }, [ready, key]);
+    const prev = window.history.scrollRestoration;
+    if (prev !== "manual") window.history.scrollRestoration = "manual";
+    return () => { window.history.scrollRestoration = prev || "auto"; };
+  }, []);
 
-  // Save on unmount + before unload
+  // Continuously persist scroll position (throttled). Unmount cleanup cannot
+  // read scrollTop reliably because React has already swapped in the detail
+  // page and the browser has clamped scrollTop.
   useEffect(() => {
-    const save = () => sessionStorage.setItem(key, String(window.scrollY));
-    window.addEventListener("beforeunload", save);
+    const el = getScrollEl();
+    if (!el) return;
+    let raf = null;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        sessionStorage.setItem(key, String(el.scrollTop || 0));
+      });
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    sessionStorage.setItem(key, String(el.scrollTop || 0));
     return () => {
-      window.removeEventListener("beforeunload", save);
-      save();
+      el.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
     };
   }, [key]);
+
+  // Restore on POP once ready. Try twice, since some rows may lazy-measure.
+  useEffect(() => {
+    if (restored.current || !ready) return;
+    if (navType !== "POP") { restored.current = true; return; }
+    const saved = sessionStorage.getItem(key);
+    if (saved == null) { restored.current = true; return; }
+    const top = Number(saved);
+    const applyOnce = () => {
+      const el = getScrollEl();
+      if (el) el.scrollTop = top;
+    };
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      applyOnce();
+      // Second pass 80ms later in case content grows after render
+      setTimeout(applyOnce, 80);
+      restored.current = true;
+    }));
+  }, [ready, navType, key]);
+}
+
+/**
+ * Cache a list view's data (items + counters) per route so returning via
+ * browser Back paints the list instantly — no loading flicker, no scroll
+ * collapse. The cache lives in sessionStorage and is scoped by namespace
+ * and current URL (pathname + search) so different filter combos each
+ * get their own snapshot.
+ *
+ * Returns { getCached(), setCached(payload) }.
+ */
+export function useListCache(namespace) {
+  const location = useLocation();
+  const key = `listcache:${namespace}:${location.pathname}${location.search || ""}`;
+  return {
+    getCached: () => {
+      try {
+        const raw = sessionStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+      } catch { return null; }
+    },
+    setCached: (payload) => {
+      try { sessionStorage.setItem(key, JSON.stringify(payload)); } catch { /* quota — ignore */ }
+    },
+  };
 }
