@@ -1,0 +1,25 @@
+{
+  "summary": "Backend-only verification of the lead-reassignment history-wipe fix. Wrote pytest at /app/backend/tests/test_reassignment_wipe.py covering all 5 reassignment paths (PATCH /leads/{id}, POST /leads/assign, POST /leads/round-robin, POST /shared-leads/move, POST /shared-leads/assign) plus two regression cases. All 8 tests pass. Verified: notes deleted, call_logs deleted, per-lead audit_logs deleted (stale status_changed entries no longer appear in /leads/{id}/activity), lead_status reset to Uncalled, and appointment_at / effective_date / completed_at / completed_by_user_id / enrolled_carrier / enrolled_plan / application_info / hra_info all cleared. Fresh 'lead_assigned' audit is preserved AFTER wipe so the receiving agent still sees the transfer in the Activity tab. /api/leaderboard and /api/users/{id}/activity-history remain healthy after per-lead audit deletion.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_reassignment_wipe.py",
+    "/app/test_reports/pytest/iter11_wipe.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_wipe_lead_history now correctly deletes db.audit_logs entries with entity_type='lead' — this is the core fix and it works end-to-end.",
+    "All 5 reassignment endpoints (PATCH /leads, /leads/assign, /leads/round-robin, /shared-leads/move, /shared-leads/assign) now consistently clear enrolled_carrier and enrolled_plan in their $set block — parity achieved.",
+    "Minor: /api/leads DELETE (single) at line 913 wipes notes+call_logs but NOT audit_logs for the deleted lead; not part of this bug but leaves orphan audit rows referencing a deleted entity. Consider harmonising with _wipe_lead_history if audit consistency matters.",
+    "server.py is 2329 lines — long-term should be split into routers (leads, shared_leads, imports, metrics, brochures).",
+    "Comment on line 82-88 in _wipe_lead_history slightly misleading — it says audit_logs are 'intentionally preserved' in the docstring line 76 but then deletes them below. Clean up the contradictory doc comment."
+  ],
+  "updated_files": ["/app/backend/tests/test_reassignment_wipe.py"],
+  "success_rate": {"backend": "100%", "frontend": "n/a (not tested per request)"},
+  "test_credentials": "Owner: owner@healthexpertscrm.com / Password123!; Agent1/Agent2/Agent3: agentN@healthexpertscrm.com / Password123!",
+  "seed_data_creation": "Created and cleaned up ~10 leads prefixed TEST_WIPE_* across tests; all deleted in finally blocks.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Reassignment history-wipe is fully verified across all 5 endpoints. If future iterations touch lead reassignment or audit trail, re-run /app/backend/tests/test_reassignment_wipe.py.",
+  "rca of the issue": "iter9/10 wiped notes+call_logs on reassignment but left per-lead audit_logs intact, so the receiving agent saw stale status_changed entries in the Activity tab. Additionally the bulk /leads/assign, /leads/round-robin, /shared-leads/move, and /shared-leads/assign endpoints omitted enrolled_carrier and enrolled_plan from their reset $set block. Fix: (1) _wipe_lead_history now also deletes audit_logs where entity_type='lead' and entity_id in ids; (2) all four bulk endpoints now include enrolled_carrier=None and enrolled_plan=None. Verified end-to-end via pytest."
+}

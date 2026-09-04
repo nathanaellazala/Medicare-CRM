@@ -71,14 +71,21 @@ DEFAULT_STATUS_NAMES = {s["name"] for s in DEFAULT_STATUSES}
 
 async def _wipe_lead_history(lead_ids: List[str]):
     """When a lead is reassigned to a different agent, wipe ALL history so the
-    receiving agent gets a completely fresh slate: delete notes and call logs,
-    reset status to "Uncalled", and clear completion metadata / effective date.
-    Audit trail (in audit_logs) is intentionally preserved.
+    receiving agent gets a completely fresh slate: delete notes, call logs,
+    AND the per-lead audit trail (so the Activity tab is empty). The caller
+    is responsible for resetting status/appointment/plan fields on the lead
+    document itself and for inserting fresh 'lead_assigned' / 'status_changed'
+    audit entries after this runs.
     """
     if not lead_ids:
         return
     await db.notes.delete_many({"lead_id": {"$in": lead_ids}})
     await db.call_logs.delete_many({"lead_id": {"$in": lead_ids}})
+    # Also wipe the per-lead audit trail so the receiving agent doesn't see
+    # any of the previous agent's status changes / assignment history in the
+    # Activity tab. Owner-level metrics (leaderboard, activity-history) key
+    # off user_id + time window, not entity_id, so this doesn't affect them.
+    await db.audit_logs.delete_many({"entity_type": "lead", "entity_id": {"$in": lead_ids}})
 
 CALL_RESULTS = [
     "No Answer", "Left Voicemail", "Spoke With Lead", "Not Interested",
@@ -975,6 +982,8 @@ async def assign_leads(body: AssignIn, user: dict = Depends(require_owner)):
             "application_info": None,
             "hra_info": None,
             "appointment_at": None,
+            "enrolled_carrier": None,
+            "enrolled_plan": None,
         }},
     )
     if body.lead_ids:
@@ -1017,6 +1026,8 @@ async def round_robin(body: RoundRobinIn, user: dict = Depends(require_owner)):
                 "application_info": None,
                 "hra_info": None,
                 "appointment_at": None,
+                "enrolled_carrier": None,
+                "enrolled_plan": None,
             }},
         ))
         audits.append({
@@ -1182,6 +1193,8 @@ async def move_to_shared_pool(body: SharedMoveIn, user: dict = Depends(require_o
             "application_info": None,
             "hra_info": None,
             "appointment_at": None,
+            "enrolled_carrier": None,
+            "enrolled_plan": None,
             "updated_at": now,
         }},
     )
@@ -1229,6 +1242,8 @@ async def assign_shared_leads(body: SharedAssignIn, user: dict = Depends(require
             "application_info": None,
             "hra_info": None,
             "appointment_at": None,
+            "enrolled_carrier": None,
+            "enrolled_plan": None,
             "updated_at": now,
         }},
     )
