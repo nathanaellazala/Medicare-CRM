@@ -37,6 +37,103 @@ function Field({ label, value, copyable }) {
   );
 }
 
+/**
+ * Tap-to-unlock phone field. Five rapid taps on the number (within ~2s)
+ * opens an inline editor to correct/change the phone. Prevents accidental
+ * edits while still letting agents fix a wrong number in the field.
+ */
+function PhoneField({ label, value, testId, onSave }) {
+  const [taps, setTaps] = React.useState(0);
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState(value || "");
+  const [saving, setSaving] = React.useState(false);
+  const resetRef = React.useRef(null);
+
+  React.useEffect(() => { setDraft(value || ""); }, [value]);
+
+  const handleTap = () => {
+    if (editing) return;
+    const next = taps + 1;
+    setTaps(next);
+    if (resetRef.current) clearTimeout(resetRef.current);
+    resetRef.current = setTimeout(() => setTaps(0), 2000);
+    if (next >= 5) {
+      setTaps(0);
+      setEditing(true);
+      toast.info("Editing phone — save to apply");
+    }
+  };
+
+  const save = async () => {
+    if (draft === (value || "")) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      await onSave(draft);
+      setEditing(false);
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1 flex items-center justify-between">
+        <span>{label}</span>
+        {taps > 0 && !editing && (
+          <span className="text-[9px] text-[#026AA2] font-normal normal-case tracking-normal">tap {5 - taps} more</span>
+        )}
+      </div>
+      {editing ? (
+        <div className="flex items-center gap-1.5">
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { setDraft(value || ""); setEditing(false); } }}
+            className="h-8 text-sm"
+            data-testid={`${testId}-input`}
+            autoFocus
+          />
+          <Button
+            onClick={save}
+            disabled={saving}
+            className="h-8 px-2 text-white text-xs"
+            style={{ background: "#026AA2" }}
+            data-testid={`${testId}-save`}
+          >
+            {saving ? "…" : "Save"}
+          </Button>
+          <Button
+            onClick={() => { setDraft(value || ""); setEditing(false); }}
+            className="h-8 px-2 bg-white border border-slate-300 text-slate-600 text-xs hover:bg-slate-50"
+            data-testid={`${testId}-cancel`}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleTap}
+            className="text-sm text-slate-900 font-medium break-words select-text text-left cursor-pointer hover:text-[#026AA2] transition-colors"
+            title="Tap 5 times quickly to edit"
+            data-testid={testId}
+          >
+            {value || "—"}
+          </button>
+          {value && (
+            <button
+              onClick={() => { navigator.clipboard.writeText(value); toast.success("Copied"); }}
+              className="text-slate-400 hover:text-[#026AA2] transition-colors"
+              data-testid={`copy-${label.toLowerCase().replace(/\s+/g, "-")}`}
+            >
+              <Copy size={12}/>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LeadDetail() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -512,8 +609,30 @@ export default function LeadDetail() {
             <Field label="First Name" value={lead.first_name}/>
             <Field label="Last Name" value={lead.last_name}/>
             <Field label="Birthdate" value={lead.birthdate}/>
-            <Field label="Phone" value={lead.phone_number} copyable/>
-            <Field label="Other Phone" value={lead.other_phone_number} copyable/>
+            <PhoneField
+              label="Phone"
+              value={lead.phone_number}
+              testId="phone-tap"
+              onSave={async (v) => {
+                try {
+                  const { data } = await api.patch(`/leads/${id}`, { phone_number: v });
+                  setLead(data);
+                  toast.success("Phone updated");
+                } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); throw e; }
+              }}
+            />
+            <PhoneField
+              label="Other Phone"
+              value={lead.other_phone_number}
+              testId="other-phone-tap"
+              onSave={async (v) => {
+                try {
+                  const { data } = await api.patch(`/leads/${id}`, { other_phone_number: v });
+                  setLead(data);
+                  toast.success("Other phone updated");
+                } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); throw e; }
+              }}
+            />
             <Field label="Address" value={lead.address}/>
             <Field label="City / State" value={lead.city ? `${lead.city}, ${lead.state}` : ""}/>
             <Field label="Zip" value={lead.zip_code}/>
