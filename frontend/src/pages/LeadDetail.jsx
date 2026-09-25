@@ -60,7 +60,6 @@ function PhoneField({ label, value, testId, onSave }) {
     if (next >= 5) {
       setTaps(0);
       setEditing(true);
-      toast.info("Editing phone — save to apply");
     }
   };
 
@@ -75,11 +74,8 @@ function PhoneField({ label, value, testId, onSave }) {
 
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1 flex items-center justify-between">
-        <span>{label}</span>
-        {taps > 0 && !editing && (
-          <span className="text-[9px] text-[#026AA2] font-normal normal-case tracking-normal">tap {5 - taps} more</span>
-        )}
+      <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">
+        {label}
       </div>
       {editing ? (
         <div className="flex items-center gap-1.5">
@@ -113,8 +109,7 @@ function PhoneField({ label, value, testId, onSave }) {
           <button
             type="button"
             onClick={handleTap}
-            className="text-sm text-slate-900 font-medium break-words select-text text-left cursor-pointer hover:text-[#026AA2] transition-colors"
-            title="Tap 5 times quickly to edit"
+            className="text-sm text-slate-900 font-medium break-words select-text text-left cursor-text bg-transparent border-0 p-0"
             data-testid={testId}
           >
             {value || "—"}
