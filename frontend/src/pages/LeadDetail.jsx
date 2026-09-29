@@ -38,11 +38,11 @@ function Field({ label, value, copyable }) {
 }
 
 /**
- * Tap-to-unlock phone field. Five rapid taps on the number (within ~2s)
- * opens an inline editor to correct/change the phone. Prevents accidental
- * edits while still letting agents fix a wrong number in the field.
+ * Tap-to-unlock inline editor. Five rapid taps on the value (within ~2s)
+ * opens an editor. Looks and feels like plain read-only text — the edit
+ * capability is intentionally hidden so agents don't edit by accident.
  */
-function PhoneField({ label, value, testId, onSave }) {
+function TapEditField({ label, value, testId, onSave, copyable }) {
   const [taps, setTaps] = React.useState(0);
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(value || "");
@@ -114,7 +114,7 @@ function PhoneField({ label, value, testId, onSave }) {
           >
             {value || "—"}
           </button>
-          {value && (
+          {copyable && value && (
             <button
               onClick={() => { navigator.clipboard.writeText(value); toast.success("Copied"); }}
               className="text-slate-400 hover:text-[#026AA2] transition-colors"
@@ -604,10 +604,11 @@ export default function LeadDetail() {
             <Field label="First Name" value={lead.first_name}/>
             <Field label="Last Name" value={lead.last_name}/>
             <Field label="Birthdate" value={lead.birthdate}/>
-            <PhoneField
+            <TapEditField
               label="Phone"
               value={lead.phone_number}
               testId="phone-tap"
+              copyable
               onSave={async (v) => {
                 try {
                   const { data } = await api.patch(`/leads/${id}`, { phone_number: v });
@@ -616,10 +617,11 @@ export default function LeadDetail() {
                 } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); throw e; }
               }}
             />
-            <PhoneField
+            <TapEditField
               label="Other Phone"
               value={lead.other_phone_number}
               testId="other-phone-tap"
+              copyable
               onSave={async (v) => {
                 try {
                   const { data } = await api.patch(`/leads/${id}`, { other_phone_number: v });
@@ -628,7 +630,18 @@ export default function LeadDetail() {
                 } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); throw e; }
               }}
             />
-            <Field label="Address" value={lead.address}/>
+            <TapEditField
+              label="Address"
+              value={lead.address}
+              testId="address-tap"
+              onSave={async (v) => {
+                try {
+                  const { data } = await api.patch(`/leads/${id}`, { address: v });
+                  setLead(data);
+                  toast.success("Address updated");
+                } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); throw e; }
+              }}
+            />
             <Field label="City / State" value={lead.city ? `${lead.city}, ${lead.state}` : ""}/>
             <Field label="Zip" value={lead.zip_code}/>
             <Field label="County" value={lead.county}/>
