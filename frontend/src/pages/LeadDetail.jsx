@@ -636,7 +636,18 @@ export default function LeadDetail() {
             <Field label="Medicare #" value={lead.medicare_number} copyable/>
             <Field label="Medicaid #" value={lead.medicaid_number} copyable/>
             <Field label="Lead Type" value={lead.lead_type || "New to Medicare"}/>
-            <Field label="Medicaid Provider" value={lead.medicaid_provider}/>
+            <TapEditField
+              label="Medicaid Provider"
+              value={lead.medicaid_provider}
+              testId="medicaid-provider-tap"
+              onSave={async (v) => {
+                try {
+                  const { data } = await api.patch(`/leads/${id}`, { medicaid_provider: v });
+                  setLead(data);
+                  toast.success("Medicaid provider updated");
+                } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); throw e; }
+              }}
+            />
             <Field label="Medicare Parts" value={lead.medicare_parts}/>
           </div>
 
