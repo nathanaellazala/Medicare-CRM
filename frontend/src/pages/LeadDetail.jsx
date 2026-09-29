@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import StatusBadge from "@/components/StatusBadge";
 import ApplicationInfo from "@/pages/ApplicationInfo";
-import { ArrowLeft, Phone, Copy, Plus, PhoneCall, Pin, ClipboardEdit, History, FileText, User, Calendar, Trash2, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, Phone, Copy, Plus, PhoneCall, Pin, ClipboardEdit, History, FileText, User, Calendar, Trash2, CheckCircle2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
 function Field({ label, value, copyable }) {
@@ -38,30 +38,14 @@ function Field({ label, value, copyable }) {
 }
 
 /**
- * Tap-to-unlock inline editor. Five rapid taps on the value (within ~2s)
- * opens an editor. Looks and feels like plain read-only text — the edit
- * capability is intentionally hidden so agents don't edit by accident.
+ * Inline edit field. Small pencil icon toggles an editor.
  */
 function TapEditField({ label, value, testId, onSave, copyable }) {
-  const [taps, setTaps] = React.useState(0);
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(value || "");
   const [saving, setSaving] = React.useState(false);
-  const resetRef = React.useRef(null);
 
   React.useEffect(() => { setDraft(value || ""); }, [value]);
-
-  const handleTap = () => {
-    if (editing) return;
-    const next = taps + 1;
-    setTaps(next);
-    if (resetRef.current) clearTimeout(resetRef.current);
-    resetRef.current = setTimeout(() => setTaps(0), 2000);
-    if (next >= 5) {
-      setTaps(0);
-      setEditing(true);
-    }
-  };
 
   const save = async () => {
     if (draft === (value || "")) { setEditing(false); return; }
@@ -106,13 +90,17 @@ function TapEditField({ label, value, testId, onSave, copyable }) {
         </div>
       ) : (
         <div className="flex items-center gap-2">
+          <div className="text-sm text-slate-900 font-medium break-words select-text">
+            {value || "—"}
+          </div>
           <button
             type="button"
-            onClick={handleTap}
-            className="text-sm text-slate-900 font-medium break-words select-text text-left cursor-text bg-transparent border-0 p-0"
-            data-testid={testId}
+            onClick={() => setEditing(true)}
+            className="text-slate-400 hover:text-[#026AA2] transition-colors"
+            title={`Edit ${label.toLowerCase()}`}
+            data-testid={`${testId}-edit`}
           >
-            {value || "—"}
+            <Pencil size={11}/>
           </button>
           {copyable && value && (
             <button
