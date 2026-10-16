@@ -112,6 +112,16 @@ TOGGLEABLE_FIELDS = [
 DEFAULT_VISIBLE_FIELDS = [f["key"] for f in TOGGLEABLE_FIELDS]
 
 
+def strip_hidden_fields(updates: dict, user: dict) -> None:
+    """Agents cannot edit fields the owner has hidden from them."""
+    visible = user.get("visible_fields")
+    if user.get("role") == "owner" or visible is None:
+        return
+    for f in DEFAULT_VISIBLE_FIELDS:
+        if f not in visible:
+            updates.pop(f, None)
+
+
 def mask_lead_for_user(lead: dict, user: dict) -> dict:
     """Blank out fields the agent is not permitted to see. Owners see everything."""
     if not lead or user.get("role") == "owner":
@@ -864,6 +874,7 @@ async def update_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depends(get
     # Agents cannot reassign leads
     if user["role"] != "owner" and "assigned_agent_id" in updates:
         updates.pop("assigned_agent_id", None)
+    strip_hidden_fields(updates, user)
     if "phone_number" in updates:
         updates["normalized_phone_number"] = normalize_phone(updates["phone_number"])
     if "first_name" in updates or "last_name" in updates:
@@ -1444,6 +1455,7 @@ async def update_shared_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depe
     if user["role"] != "owner":
         updates.pop("assigned_agent_id", None)
         updates.pop("is_shared", None)
+        strip_hidden_fields(updates, user)
 
     if "phone_number" in updates:
         updates["normalized_phone_number"] = normalize_phone(updates["phone_number"])

@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { ArrowLeft, Lock, Unlock, Phone, MapPin, IdCard, Cross, FileText, User as UserIcon } from "lucide-react";
 import StatusBadge from "@/components/StatusBadge";
+import { useAuth } from "@/context/AuthContext";
+import { TapEditField } from "@/pages/LeadDetail";
 
 // Heartbeat every 60s to keep the lock alive while the tab is open
 const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -14,6 +16,8 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 export default function SharedLeadDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const canEditProvider = user?.role === "owner" || !user?.visible_fields || user.visible_fields.includes("medicaid_provider");
   const [lead, setLead] = useState(null);
   const [statuses, setStatuses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -165,7 +169,19 @@ export default function SharedLeadDetail() {
             <InfoRow icon={<IdCard size={13}/>} label="Medicare #" value={lead.medicare_number}/>
             <InfoRow icon={<Cross size={13}/>} label="Medicaid #" value={lead.medicaid_number}/>
             <InfoRow icon={<FileText size={13}/>} label="Medicare parts" value={lead.medicare_parts}/>
-            <InfoRow icon={<FileText size={13}/>} label="Medicaid provider" value={lead.medicaid_provider}/>
+            <TapEditField
+              label="Medicaid provider"
+              value={lead.medicaid_provider}
+              testId="shared-medicaid-provider"
+              editable={canEditProvider}
+              onSave={async (v) => {
+                try {
+                  const { data } = await api.patch(`/shared-leads/${id}`, { medicaid_provider: v });
+                  setLead((l) => ({ ...l, medicaid_provider: data.medicaid_provider }));
+                  toast.success("Medicaid provider updated");
+                } catch (e) { toast.error(formatApiError(e.response?.data?.detail)); throw e; }
+              }}
+            />
             <InfoRow icon={<FileText size={13}/>} label="Lead type" value={lead.lead_type}/>
           </div>
         </Card>

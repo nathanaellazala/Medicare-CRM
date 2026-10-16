@@ -40,7 +40,7 @@ function Field({ label, value, copyable }) {
 /**
  * Inline edit field. Small pencil icon toggles an editor.
  */
-function TapEditField({ label, value, testId, onSave, copyable }) {
+export function TapEditField({ label, value, testId, onSave, copyable, editable = true }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(value || "");
   const [saving, setSaving] = React.useState(false);
@@ -93,15 +93,17 @@ function TapEditField({ label, value, testId, onSave, copyable }) {
           <div className="text-sm text-slate-900 font-medium break-words select-text">
             {value || "—"}
           </div>
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="text-slate-400 hover:text-[#026AA2] transition-colors"
-            title={`Edit ${label.toLowerCase()}`}
-            data-testid={`${testId}-edit`}
-          >
-            <Pencil size={11}/>
-          </button>
+          {editable && (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="text-slate-400 hover:text-[#026AA2] transition-colors"
+              title={`Edit ${label.toLowerCase()}`}
+              data-testid={`${testId}-edit`}
+            >
+              <Pencil size={11}/>
+            </button>
+          )}
           {copyable && value && (
             <button
               onClick={() => { navigator.clipboard.writeText(value); toast.success("Copied"); }}
@@ -143,6 +145,7 @@ export default function LeadDetail() {
   const [editPlanForm, setEditPlanForm] = useState({ enrolled_carrier: "", enrolled_plan: "" });
 
   const isOwner = user?.role === "owner";
+  const canEdit = (k) => isOwner || !user?.visible_fields || user.visible_fields.includes(k);
 
   const load = async () => {
     try {
@@ -596,6 +599,7 @@ export default function LeadDetail() {
               label="Phone"
               value={lead.phone_number}
               testId="phone-tap"
+              editable={canEdit("phone_number")}
               copyable
               onSave={async (v) => {
                 try {
@@ -622,6 +626,7 @@ export default function LeadDetail() {
               label="Address"
               value={lead.address}
               testId="address-tap"
+              editable={canEdit("address")}
               onSave={async (v) => {
                 try {
                   const { data } = await api.patch(`/leads/${id}`, { address: v });
@@ -640,6 +645,7 @@ export default function LeadDetail() {
               label="Medicaid Provider"
               value={lead.medicaid_provider}
               testId="medicaid-provider-tap"
+              editable={canEdit("medicaid_provider")}
               onSave={async (v) => {
                 try {
                   const { data } = await api.patch(`/leads/${id}`, { medicaid_provider: v });

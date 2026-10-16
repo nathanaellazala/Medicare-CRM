@@ -5,6 +5,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CheckCircle2, Search, ChevronRight, Download, Upload, Award, Calendar as CalIcon, User as UserIcon, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useScrollRestore } from "@/lib/useScrollRestore";
@@ -40,6 +41,13 @@ export default function BookOfBusiness() {
   const [effFrom, setEffFrom] = useState("");
   const [effTo, setEffTo] = useState("");
   const [sort, setSort] = useState("updated_desc");
+  const [agentId, setAgentId] = useState("all");
+  const [agents, setAgents] = useState([]);
+
+  useEffect(() => {
+    if (!isOwner) return;
+    api.get("/users").then(({ data }) => setAgents(data.filter((u) => u.role === "agent"))).catch(() => {});
+  }, [isOwner]);
 
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
   const allSelected = items.length > 0 && items.every((l) => selected[l.id]);
@@ -76,6 +84,7 @@ export default function BookOfBusiness() {
       if (q) params.q = q;
       if (effFrom) params.effective_from = effFrom;
       if (effTo)   params.effective_to = effTo;
+      if (isOwner && agentId !== "all") params.agent_id = agentId;
       const { data } = await api.get("/leads", { params });
       setItems(data.items);
       setTotal(data.total);
@@ -88,7 +97,7 @@ export default function BookOfBusiness() {
     const t = setTimeout(load, 200);
     return () => clearTimeout(t);
     // eslint-disable-next-line
-  }, [q, effFrom, effTo, sort]);
+  }, [q, effFrom, effTo, sort, agentId]);
 
   useScrollRestore("book-of-business", !loading);
 
@@ -186,6 +195,22 @@ export default function BookOfBusiness() {
             data-testid="bob-search"
           />
         </div>
+        {isOwner && (
+          <Select value={agentId} onValueChange={setAgentId}>
+            <SelectTrigger className="h-9 w-48 text-sm" data-testid="bob-agent-filter">
+              <UserIcon size={14} className="text-slate-500 mr-1"/>
+              <SelectValue placeholder="All agents"/>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="bob-agent-option-all">All agents</SelectItem>
+              {agents.map((a) => (
+                <SelectItem key={a.id} value={a.id} data-testid={`bob-agent-option-${a.id}`}>
+                  {a.first_name} {a.last_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <div className="flex items-center gap-2">
           <CalIcon size={14} className="text-slate-500"/>
           <span className="text-xs text-slate-600 whitespace-nowrap">Effective</span>
