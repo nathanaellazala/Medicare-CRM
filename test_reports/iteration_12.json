@@ -1,0 +1,41 @@
+{
+  "summary": "Tested agent Medicaid Provider editing (LeadDetail + SharedLeadDetail), hidden-field enforcement (UI pencil + backend strip), and owner-only Book of Business agent filter. Backend 9/9 pytest pass. UI: all requested flows pass. One permission/privacy gap found: GET /api/shared-leads/{id} (and PATCH responses) are NOT masked, so an agent with medicaid_provider hidden still SEES the value on SharedLeadDetail (no pencil, but value displayed).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/shared-leads/{id}", "issue": "Returns clean_doc(lead) without mask_lead_for_user, so hidden fields (medicaid_provider, phone, address...) are visible to agents on SharedLeadDetail. Verified: with medicaid_provider hidden, agent saw 'UISharedAgent' on /shared-leads/{id}. Same for PATCH /api/shared-leads/{id} response. GET /api/shared-leads list 'plan' column also exposes medicaid_provider."},
+      {"endpoint": "PATCH /api/leads/{id}", "issue": "Response returns unmasked doc (clean_doc) to agents — hidden field values leak in the PATCH response body (UI then may setLead with them). Wrap with mask_lead_for_user."},
+      {"endpoint": "POST /api/shared-leads/{id}/lock, GET/PATCH /api/shared-leads/{id}", "issue": "can_access_shared_pool=False is only enforced on the list endpoint; an agent with pool access disabled can still lock/view/edit a shared lead by id (pre-existing)."},
+      {"endpoint": "GET /api/leads/export/csv", "issue": "BoB Export CSV button uses ?status=Complete only — ignores the new agent filter (and q/effective filters)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LeadDetail header (agent view)", "issue": "'Assigned to 4aafe7e8-...' shows raw agent UUID instead of agent name when logged in as agent", "selector": "LeadDetail header", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "SharedLeadDetail", "issues": ["Medicaid Provider row (TapEditField) has no leading icon unlike other InfoRows, slight misalignment"]},
+      {"screen": "Book of Business (owner)", "issues": ["Subtitle 'the ones you closed' is odd for owner viewing all/other agents", "When filtered by agent, 'Completed by' column shows completer (Test Owner) not the assigned agent; consider showing Agent column"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter12_medicaid_bob.py", "/app/backend/tests/iter12_ui_setup.py", "/app/test_reports/pytest/iter12.xml"],
+  "action_items": [
+    "Apply mask_lead_for_user in GET /api/shared-leads/{id} and in PATCH /api/shared-leads/{id} + PATCH /api/leads/{id} responses so hidden fields are not shown to agents",
+    "Optional: pass agent_id (and other filters) to BoB Export CSV",
+    "Optional: show agent name instead of UUID in LeadDetail 'Assigned to' for agents",
+    "Optional: enforce can_access_shared_pool on lock/get/patch shared-lead endpoints"
+  ],
+  "critical_code_review_comments": [
+    "strip_hidden_fields correctly applied in both PATCH endpoints; owner bypass correct; legacy users (visible_fields None) allowed",
+    "GET /leads agent_id filter correctly owner-only; agents passing agent_id still scoped to own leads (verified)",
+    "Frontend canEdit relies on AuthContext user; if owner changes visible_fields while agent is logged in, pencil stays until /auth/me refetch (backend still strips, so safe)",
+    "LeadDetail.jsx is 828 lines (>700) — consider splitting"
+  ],
+  "updated_files": ["/app/backend/tests/test_iter12_medicaid_bob.py", "/app/backend/tests/iter12_ui_setup.py"],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% of requested flows; 1 masking leak found on SharedLeadDetail"},
+  "seed_data_creation": "TEST_ leads created and deleted. agent1 visible_fields restored to full list; agent1 can_access_shared_pool was False before testing, temporarily set True for UI, restored to False.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "agent1 has can_access_shared_pool=False by default in this DB — enable via PATCH /api/users/{id} {can_access_shared_pool:true} to test shared pool UI, restore afterwards. Use iter12_ui_setup.py (setup/hide/restore/pool_on/pool_off/teardown). Run pytest with -n 0 (xdist is enabled in pytest.ini)."
+}

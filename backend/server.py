@@ -917,7 +917,7 @@ async def update_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depends(get
     if "assigned_agent_id" in updates and updates["assigned_agent_id"] != existing.get("assigned_agent_id"):
         await add_audit(user["_id"], "lead_assigned", "lead", lead_id,
                         existing.get("assigned_agent_id"), updates["assigned_agent_id"])
-    return clean_doc(await db.leads.find_one({"_id": lead_id}))
+    return mask_lead_for_user(clean_doc(await db.leads.find_one({"_id": lead_id})), user)
 
 @api.delete("/leads/{lead_id}")
 async def delete_lead(lead_id: str, user: dict = Depends(require_owner)):
@@ -1353,6 +1353,7 @@ async def list_shared_leads(
     for d in items:
         active = _lock_is_active(d.get("locked_at"))
         locked_by = d.get("locked_by_user_id") if active else None
+        d = mask_lead_for_user(d, user)
         # Compose "address" from parts for display
         parts = [d.get("address"), d.get("city"), d.get("state")]
         address = ", ".join([p for p in parts if p])
@@ -1373,6 +1374,8 @@ async def list_shared_leads(
 async def lock_shared_lead(lead_id: str, user: dict = Depends(get_current_user)):
     """Attempt to acquire the exclusive open-lock on a shared lead.
     Returns 200 if acquired (or already held by same user), 423 (Locked) otherwise."""
+    if user["role"] == "agent" and user.get("can_access_shared_pool") is False:
+        raise HTTPException(403, "Shared pool access is disabled for your account")
     lead = await db.leads.find_one({"_id": lead_id})
     if not lead or not lead.get("is_shared"):
         raise HTTPException(404, "Shared lead not found")
@@ -1428,7 +1431,7 @@ async def get_shared_lead(lead_id: str, user: dict = Depends(get_current_user)):
     if user["role"] != "owner":
         if not active or holder != user["_id"]:
             raise HTTPException(status_code=423, detail="You must claim this lead first")
-    return clean_doc(lead)
+    return mask_lead_for_user(clean_doc(lead), user)
 
 
 @api.patch("/shared-leads/{lead_id}")
@@ -1484,7 +1487,7 @@ async def update_shared_lead(lead_id: str, body: LeadUpdateIn, user: dict = Depe
     if "lead_status" in updates and updates["lead_status"] != lead.get("lead_status"):
         await add_audit(user["_id"], "status_changed", "lead", lead_id,
                         lead.get("lead_status"), updates["lead_status"])
-    return clean_doc(await db.leads.find_one({"_id": lead_id}))
+    return mask_lead_for_user(clean_doc(await db.leads.find_one({"_id": lead_id})), user)
 
 
 

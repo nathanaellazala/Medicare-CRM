@@ -159,7 +159,7 @@ export default function BookOfBusiness() {
           </div>
           <h1 className="font-heading text-2xl font-semibold text-slate-900">Book of Business</h1>
           <p className="text-sm text-slate-500 mt-1">
-            {total.toLocaleString()} completed {total === 1 ? "client" : "clients"} — the ones you closed.
+            {total.toLocaleString()} completed {total === 1 ? "client" : "clients"} {isOwner ? (agentId === "all" ? "— across all agents." : "— for the selected agent.") : "— the ones you closed."}
           </p>
         </div>
         {isOwner && (
@@ -173,7 +173,7 @@ export default function BookOfBusiness() {
               <Upload size={14} className="mr-1.5" /> Upload wins
             </Button>
             <Button
-              onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/leads/export/csv?status=Complete`, "_blank")}
+              onClick={() => window.open(`${process.env.REACT_APP_BACKEND_URL}/api/leads/export/csv?status=Complete${agentId !== "all" ? `&agent_id=${agentId}` : ""}`, "_blank")}
               className="h-9 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50"
               data-testid="bob-export"
             >

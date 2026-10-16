@@ -118,3 +118,9 @@ Delivered based on user feedback:
 - Backend: `/app/backend/tests/test_iter10_features.py` — 10/10 pass.
 - Frontend: 7/7 Playwright flows pass (iteration_10.json).
 
+
+## 2026-06 Update (fork)
+- Agents can edit Medicaid Provider via pencil on Lead Detail AND Shared Lead Detail (while claimed). Pencil hidden + backend ignores edits for any field the owner has hidden for that agent (strip_hidden_fields).
+- Book of Business: owner-only "All agents"/per-agent dropdown filter (uses GET /api/leads?agent_id=); Export CSV honours the agent filter.
+- Hardening: shared-lead GET/PATCH, lead PATCH responses and shared pool list are now masked per agent visible_fields; shared-lead lock blocked when agent's shared pool access is disabled.
+- Tested: iteration_12 (backend 9/9, UI flows pass) + curl verification of follow-up fixes.

@@ -323,6 +323,7 @@ export default function LeadDetail() {
 
   const agentName = (aid) => {
     if (!aid) return "Unassigned";
+    if (aid === user?.id) return `${user.first_name} ${user.last_name}`;
     const a = agents.find((x) => x.id === aid);
     return a ? `${a.first_name} ${a.last_name}` : aid;
   };
