@@ -62,6 +62,8 @@ Create `backend/.env` with **locally generated, unique** values:
 MONGO_URL=mongodb://127.0.0.1:27017
 DB_NAME=health_experts_crm_dev
 JWT_SECRET=replace-with-a-long-random-local-secret
+# Only for isolated HTTP localhost development; use true with HTTPS:
+COOKIE_SECURE=false
 ```
 
 Then:
@@ -123,3 +125,9 @@ python3 -m pytest tests/
 ---
 
 Built as a practical software project focused on turning complex team workflows into usable tools.
+
+### Offline session regression checks
+
+Install the minimal backend imports (FastAPI, Motor/PyMongo, PyJWT, bcrypt, pandas, python-dotenv, python-multipart, email-validator), then run `cd backend && python -m unittest discover -s security_tests -v`. These tests replace database reads with synthetic mocks and do not run application startup. They do not verify database ACLs, deployed cookies, token revocation, or browser behavior.
+
+Cookies default to Secure; set `COOKIE_SECURE=false` only for isolated HTTP localhost development. Existing bearer-token clients still use browser local storage; refresh rotation and session revocation require further design.
