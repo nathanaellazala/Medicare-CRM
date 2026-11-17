@@ -439,7 +439,8 @@ async def refresh(request: Request, response: Response):
 async def list_users(user: dict = Depends(get_current_user)):
     # Both roles can list users (agents see basic info for leaderboard).
     # Owners must be able to audit all accounts, including legacy hidden users.
-    users = await db.users.find({}).sort("first_name", 1).to_list(500)
+    query = {} if user.get("role") == "owner" else {"is_hidden": {"$ne": True}}
+    users = await db.users.find(query).sort("first_name", 1).to_list(500)
     now = datetime.now(timezone.utc)
     result = []
     for u in users:
