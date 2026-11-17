@@ -123,3 +123,9 @@ python3 -m pytest tests/
 ---
 
 Built as a practical software project focused on turning complex team workflows into usable tools.
+
+### Integration-test safety gate
+
+`backend/tests` can alter and delete records. Pytest refuses this directory unless both `CRM_TEST_ISOLATED=1` and a loopback `REACT_APP_BACKEND_URL` are configured. This declaration does not prove database isolation: ensure the local API points to a disposable database populated only with synthetic records. The guard also rejects remote HTTP requests and redirects through requests. It does not sandbox arbitrary Python networking or standalone setup scripts.
+
+Example after provisioning disposable fixtures: `CRM_TEST_ISOLATED=1 REACT_APP_BACKEND_URL=http://127.0.0.1:8000 python -m pytest tests/`. Never use a tunnel or local proxy to production.
