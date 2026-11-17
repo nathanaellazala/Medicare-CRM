@@ -2319,29 +2319,6 @@ async def startup():
             set_fields["completed_by_user_id"] = audit["user_id"]
         await db.leads.update_one({"_id": lead["_id"]}, {"$set": set_fields})
 
-    # Write test credentials
-    try:
-        memory = Path("/app/memory")
-        memory.mkdir(exist_ok=True)
-        (memory / "test_credentials.md").write_text(
-            "# Health Experts CRM — Test Credentials\n\n"
-            "## Owner / Admin\n"
-            "- Email: owner@healthexpertscrm.com\n"
-            "- Password: Password123!\n"
-            "- Role: owner\n\n"
-            "## Agents\n"
-            "- agent1@healthexpertscrm.com / Password123! (role: agent)\n"
-            "- agent2@healthexpertscrm.com / Password123! (role: agent)\n"
-            "- agent3@healthexpertscrm.com / Password123! (role: agent)\n\n"
-            "## Auth Endpoints\n"
-            "- POST /api/auth/login\n"
-            "- POST /api/auth/logout\n"
-            "- GET  /api/auth/me\n"
-            "- POST /api/auth/refresh\n"
-        )
-    except Exception:
-        pass
-
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
