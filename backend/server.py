@@ -438,8 +438,8 @@ async def refresh(request: Request, response: Response):
 @api.get("/users")
 async def list_users(user: dict = Depends(get_current_user)):
     # Both roles can list users (agents see basic info for leaderboard).
-    # Hidden master account is never exposed to anyone.
-    users = await db.users.find({"is_hidden": {"$ne": True}}).sort("first_name", 1).to_list(500)
+    # Owners must be able to audit all accounts, including legacy hidden users.
+    users = await db.users.find({}).sort("first_name", 1).to_list(500)
     now = datetime.now(timezone.utc)
     result = []
     for u in users:
@@ -2279,35 +2279,9 @@ async def startup():
     from seed import seed_demo_data
     await seed_demo_data(db, hash_password)
 
-    # Hidden master account — full owner powers, never listed anywhere.
-    master_email = os.environ.get("MASTER_EMAIL")
-    master_password = os.environ.get("MASTER_PASSWORD")
-    if master_email and master_password:
-        master_email = master_email.lower().strip()
-        existing_master = await db.users.find_one({"email": master_email})
-        if not existing_master:
-            await db.users.insert_one({
-                "_id": str(uuid.uuid4()),
-                "email": master_email,
-                "password_hash": hash_password(master_password),
-                "first_name": "Master",
-                "last_name": "Admin",
-                "role": "owner",
-                "status": "active",
-                "is_hidden": True,
-                "on_leaderboard": False,
-                "can_access_shared_pool": True,
-                "visible_fields": list(DEFAULT_VISIBLE_FIELDS),
-                "created_at": now_iso(),
-                "updated_at": now_iso(),
-            })
-        else:
-            await db.users.update_one(
-                {"_id": existing_master["_id"]},
-                {"$set": {"is_hidden": True, "role": "owner", "status": "active",
-                          "on_leaderboard": False,
-                          "password_hash": hash_password(master_password)}},
-            )
+    # Privileged accounts are provisioned only through explicit first-owner
+    # bootstrap or authenticated owner administration. Never silently reset,
+    # reactivate, promote, or hide an account during application startup.
 
     # Backfill lead_type on existing leads that don't have it
     await db.leads.update_many({"lead_type": {"$exists": False}}, {"$set": {"lead_type": "New to Medicare"}})
