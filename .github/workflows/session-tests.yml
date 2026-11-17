@@ -1,0 +1,16 @@
+name: Offline session regression tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  sessions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-security-tests.txt
+        working-directory: backend
+      - run: python -m unittest discover -s security_tests -v
+        working-directory: backend

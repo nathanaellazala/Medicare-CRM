@@ -31,6 +31,8 @@ MONGO_URL = os.environ['MONGO_URL']
 DB_NAME = os.environ['DB_NAME']
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
+# HTTPS by default; explicit opt-out is only for isolated HTTP development.
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() != "false"
 ACCESS_TTL = 60 * 60 * 12  # 12 hours
 REFRESH_TTL = 60 * 60 * 24 * 7
 
@@ -159,8 +161,8 @@ def make_token(user_id: str, email: str, role: str, ttl: int, kind: str) -> str:
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 def set_auth_cookies(resp: Response, access: str, refresh: str):
-    resp.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax", max_age=ACCESS_TTL, path="/")
-    resp.set_cookie("refresh_token", refresh, httponly=True, secure=False, samesite="lax", max_age=REFRESH_TTL, path="/")
+    resp.set_cookie("access_token", access, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=ACCESS_TTL, path="/")
+    resp.set_cookie("refresh_token", refresh, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=REFRESH_TTL, path="/")
 
 def clear_auth_cookies(resp: Response):
     resp.delete_cookie("access_token", path="/")
@@ -426,8 +428,10 @@ async def refresh(request: Request, response: Response):
         user = await db.users.find_one({"_id": payload["sub"]})
         if not user:
             raise HTTPException(401, "User not found")
+        if user.get("status") == "inactive":
+            raise HTTPException(403, "Account deactivated")
         access = make_token(user["_id"], user["email"], user["role"], ACCESS_TTL, "access")
-        response.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax", max_age=ACCESS_TTL, path="/")
+        response.set_cookie("access_token", access, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=ACCESS_TTL, path="/")
         return {"ok": True}
     except jwt.InvalidTokenError:
         raise HTTPException(401, "Invalid token")
